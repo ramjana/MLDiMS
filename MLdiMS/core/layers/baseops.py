@@ -1,0 +1,318 @@
+#Initial version
+
+import functools
+from typing import Any, Dict, Tuple, Callable
+from pprint import pprint
+
+import numpy as np
+from operator import attrgetter
+
+import flax.linen as nn
+import jax
+import jax.numpy as jnp
+from jax import core
+
+Pytree = Any
+
+
+
+def perf(message1,get_attrvalue):
+    def decorator(LayerOp):
+        #result_cache = {}
+        print(message1)
+        def wrapper(self,*args, **kwargs):
+            #cache_key = (*args, *kwargs.items())
+            print(message2)
+            M,K = jnp.shape(args[0])
+            N =  get_attrvalue(self)
+            print(f"flops = {2*N*M*K}")
+            result = LayerOp(self,*args,**kwargs)
+            print(f"LayerOp {self.__class__.__name__} took { 10: .2f} seconds to execute")
+            #result_cache[cache_key] = result
+            return result
+        return wrapper
+    return decorator
+
+
+class Dense(nn.Dense):
+    """ A linear dense layer inherited from jax.liner.nn.dense
+    Orignal Source code is at
+    https://flax.readthedocs.io/en/v0.5.3/_modules/flax/linen/linear.html#Dense
+    """
+
+    def setup(self):
+        super().setup()
+
+    #@perf("Dense",attrgetter('features'),attrgetter('dtype'))
+    @nn.compact
+    def __call__(self,x: jax.Array) -> jax.Array:
+        # update cycles 
+        return (super().__call__(x))
+
+class Linear(nn.Dense):
+    """ A liner dense layer inherited from jax.liner.nn.dense
+    Orignal Source code is at
+    https://flax.readthedocs.io/en/v0.5.3/_modules/flax/linen/linear.html#Dense
+    """
+
+    def setup(self):
+        super().setup()
+
+    #@perf("DenseOp",attrgetter('features'),attrgetter('dtype'))
+    @nn.compact
+    def __call__(self,x: jax.Array) -> jax.Array:
+        # update cycles 
+        return (super().__call__(x))
+
+class Embed(nn.Embed):
+    """ Embedding op inherited from jax.liner.nn.Embedding
+    """
+
+    def setup(self):
+        super().setup()
+
+    #@perf("EmbedOp",attrgetter('name'),attrgetter('features'),attrgetter('num_embeddings'),attrgetter('dtype'))
+    @nn.compact
+    def __call__(self,x: jax.Array) -> jax.Array:
+        return (super().__call__(x))
+
+class RMSNorm(nn.RMSNorm):
+    """
+    normalization layer inherited from jax.liner.nn.
+    """
+    def setup(self):
+        super().setup()
+
+    #@perf("RMSNorm",attrgetter('name'),attrgetter('dtype'))
+    @nn.compact
+    def __call__(self,x: jax.Array) -> jax.Array:
+        return (super().__call__(x))
+
+class LayerNorm(nn.RMSNorm):
+    """
+    normalization layer inherited from jax.liner.nn.
+    """
+    def setup(self):
+        super().setup()
+
+    #@perf("LayerNorm",attrgetter('name'),attrgetter('dtype'))
+    @nn.compact
+    def __call__(self,x: jax.Array) -> jax.Array:
+        return (super().__call__(x))
+
+class softmax(nn.Module):
+    """
+      softmax layer inherited from jax.liner.nn
+
+    """
+    def setup(self):
+        super().setup()
+
+    #@perf("softmax",attrgetter('name'),attrgetter('dtype'))
+    @nn.compact
+    def __call__(self,x: jax.Array) -> jax.Array:
+        #return (super().__call__(x))
+        return (nn.softmax(x))
+
+
+class dot_product_attention(nn.Module): 
+    """
+      use same algorithm as https://flax.readthedocs.io/en/latest/api_reference/flax.linen/layers.html#flax.linen.dot_product_attention
+      based on attention is all you need paper
+
+      use f32 for softmax
+
+      args:
+         query : query jax.array of shape [..., seq_len,num_heads,attn_dim]
+         key :  key jax.array of shape [..., seq_len,num_heads,attn_dim]
+         value : value jax.array of shape [..., seq_len,num_heads,attn_dim]
+         mask: boolean mask array (0 for mask 1 for non-mask)
+
+     returns attention output jax array of shape [...,seq_len,num_heads,attn-dim]
+    """
+    def setup(self):
+        super().setup()
+
+    #@perf("dot_product_attention",attrgetter('name'),attrgetter('dtype'))
+    @nn.compact
+    def __call__(self,query: jax.Array, key: jax.Array, value: jax.Array, mask: jax.Array, attn_bias: bool = False, bias: jax.Array = None) -> jax.Array:
+       attn_dim = query.shape[-1]
+       dtype = query.dtype
+       scale = attn_dim**-0.5
+       #convert to float32
+       query = query.astype(jnp.float32)
+       key = key.astype(jnp.float32)
+       value = value.astype(jnp.float32)
+       query = query * scale
+       qk  = jnp.einsum("...qhd,...khd->...hqk", query,key)
+       if attn_bias is not None and attn_bias == True:
+           bias = bias.astype(jnp.float32)
+           qk = qk + jnp.log2(bias)
+       if mask is not None:
+           qk = jnp.where(mask,qk,jnp.finfo(jnp.float32).min)
+       ## do softmax    
+       qk = nn.softmax(qk,axis=-1)
+       #down convert to original tensor data type
+       qk = qk.astype(dtype)
+       P = jnp.einsum("...hqk,...khd->...qhd",qk,value)
+       P = P.astype(dtype)
+       return P
+
+
+class DenseGeneral(nn.DenseGeneral):
+    """ linear dense layer with flexible axes inherited from jax.liner.nn.DenseGeneral
+    Orignal Source code is at
+    https://flax.readthedocs.io/en/v0.5.3/_modules/flax/linen/linear.html#DenseGeneral
+    """
+
+    def setup(self):
+        super().setup()
+
+    #@perf("DenseGeneral",attrgetter('features'))
+    def __call__(self,x: jax.Array) -> jax.Array:
+        # update cycles 
+        return (super().__call__(x))
+
+class LearnedPositionalEncoding(nn.Module):
+
+    """
+    module learns positional embeddings up to a fixed maximum size.
+    Padding ids are ignored by either offsetting based on padding_idx
+    or by setting padding_idx to None and ensuring that the appropriate
+    position ids are passed to the forward function.
+    """
+    seq_len: int
+    embedding_dim: int
+
+    def setup(self):
+        super().setup() 
+
+    #@perf("LearnedPositionalEncoding",attrgetter('name'),attrgetter('dtype'))
+    @nn.compact
+    def __call__(self,x: jax.Array) -> jax.Array:
+       self.seq_len,self.embedding_dim = x.shape[-2:]
+       pos_embed = self.param(
+           "positional_embedding", 
+           nn.initializers.normal(stddev=self.embedding_dim**-0.5),
+           (self.seq_len,self.embedding_dim),
+       )
+       pos_emb = pos_embed.astype(
+          x.dtype
+       )
+       pos_embed = jnp.expand_dims(pos_embed,axis=range(x.ndim-2))
+       x = x + pos_embed
+       return x     
+
+
+class SinusoidalPositionalEncoding(nn.Module):
+
+    """
+       sinusoidal positional embedding
+    """
+    seq_len: int
+    embedding_dim: int
+    shard_axis_name: str
+    padding_idx: int = None
+    max_positions: int = None
+
+    def setup(self):
+        super().setup() 
+
+    #@perf("SinuSoidalPositionalEncoding",attrgetter('name'),attrgetter('dtype'))
+    @nn.compact
+    def __call__(self,x: jax.Array) -> jax.Array:
+        num_devices = jax.lax.psum(1,self.shard_axis_name)
+        tp_index = jax.lax.axis_index(self.shard_axis_name)
+        seq_len,embedding_dim = x.shape[-2:]
+        position = jnp.arange(0,seq_len,dtype=jnp.float32)[:,None]
+        div_val = jnp.exp(jnp.arange(tp_index*embedding_dim,(tp_index+1)*embedding_dim,2) * (-np.log(10000.0) / (num_devices*embedding_dim)))
+        sinu_embed = jnp.stack([jnp.sin(position * div_val), jnp.cos(position * div_val)], axis=-1) 
+        sinu_embed = jnp.reshape(sinu_embed,(seq_len,embedding_dim))
+        sinu_embed = sinu_embed.astype(x.dtype)
+        sinu_embed = jnp.expand_dims(sinu_embed,axis=range(x.ndim-2))
+        x = x + sinu_embed
+        return x
+
+class AttnOutput(nn.Module):
+     """
+      module to flatten out last two dimension of the input [...,num_heads,attn-dim] before 
+      applying linear transformation 
+
+     """
+     embedding_dim : int  #model dimension 
+     data_type: jnp.dtype
+     use_bias: bool = True
+     kernel_init:  Callable = nn.initializers.lecun_normal()
+
+     def setup(self):
+         super().setup()
+
+     @nn.compact
+     def __call__(self,x: jax.Array) -> jax.Array:
+         x = DenseGeneral(
+             features=self.embedding_dim,
+             axis=(-2,-1),
+             kernel_init=self.kernel_init,
+             use_bias=self.use_bias,
+             dtype=self.data_type,
+             name="AttnOut"
+         )(x)
+         return x 
+
+class silu(nn.silu):
+     """ 
+        activation module inherited from jax module
+        silu(x) = x*sigmoid(x)
+
+     """
+
+     def setup(self):
+         super().setup()
+
+     #@perf("silu",attrgetter('name'),attrgetter('dtype'))
+     @nn.compact
+     def __call__(self,x : jax.Array) -> jax.Array:
+         return super().__call__(x)
+
+class relu(nn.Module):
+     """ 
+        activation module inherited from jax module
+        relu(x) = max(0,x)
+
+     """
+
+     def setup(self):
+         super().setup()
+
+     #@perf("relu",attrgetter('name'),attrgetter('dtype'))
+     @nn.compact
+     def __call__(self,x : jax.Array) -> jax.Array:
+         return nn.relu(x) 
+
+class gelu(nn.Module):
+     """ 
+        gaussian error linear module inherited from jax module
+        original source at https://github.com/google/jax/blob/main/jax/_src/nn/functions.py#L218-L241
+     """
+
+     def setup(self):
+         super().setup()
+
+     #@perf("gelu",attrgetter('name'),attrgetter('dtype'))
+     @nn.compact
+     def __call__(self,x : jax.Array) -> jax.Array:
+         return nn.gelu(x)
+
+class Dropout(nn.Dropout):
+     """
+        stochastic normalization technique randomly removes hidden and visible
+        units in network
+     """
+
+     def setup(self):
+         super().setup()
+
+     #@perf("dropout")
+     @nn.compact
+     def __call__(self, x: jax.Array) -> jax.Array:
+         return super().__call(x)

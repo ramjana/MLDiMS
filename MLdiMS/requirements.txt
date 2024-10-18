@@ -1,0 +1,6 @@
+jax>=0.4.30
+jaxlib>=0.4.30
+tqdm
+ml-collections
+flax>=0.8.0
+optax
