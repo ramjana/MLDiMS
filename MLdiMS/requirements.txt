@@ -4,3 +4,9 @@ tqdm
 ml-collections
 flax>=0.8.0
 optax
+jsonargparse
+torch
+docstring_parser
+requests
+huggingface_hub
+tiktoken

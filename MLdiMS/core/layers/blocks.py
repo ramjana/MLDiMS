@@ -1,7 +1,7 @@
 #initial version
 import functools
 from pprint import pprint
-from typing import Any, Callable, Dict, Literal, Tuple
+from typing import Any, Callable, Dict, Literal, Tuple, Mapping, Optional
 
 import flax.linen as nn
 import jax
@@ -22,9 +22,12 @@ from .baseops import (
         softmax,
         Embed,
         Linear,
-        gelu
+        gelu,
+        normalize_attention,
+        ShardMixIn
     )
 
+from .kvcache import kvcache
 
 
 ##MLPBlock building block of the transformer
@@ -34,9 +37,10 @@ from .baseops import (
 class MLPBlockInput(nn.Module):
     features: int
     data_type : jnp.dtype
-    use_norm : bool = False
-    use_bias : bool = True
+    use_norm : bool = True
+    use_bias : bool = False
     kernel_init: Callable = nn.initializers.lecun_normal()
+
 
     def setup(self):
         super().setup()
@@ -44,7 +48,7 @@ class MLPBlockInput(nn.Module):
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
         if self.use_norm:
-            x = RMSNorm(dtype=self.data_type, name="MLPPreNorm")(x)
+            x = RMSNorm(dtype=self.dtype, name="MLPPreNorm", epsilon=self.epsilon)(x)
         x = Dense(
             features=self.features,
             kernel_init = self.kernel_init,
@@ -80,8 +84,11 @@ class MLPBlock(nn.Module):
      hidden_dim: int
      embedding_dim: int
      data_type: jnp.dtype
+     weight_dtype: jnp.dtype
      use_norm: bool = False
      use_bias: bool = True
+     shard_axes: Optional[Mapping[str,Tuple[str,...]]] = None
+     kernel_init : Callable = nn.initializers.xavier_uniform()
 
      def setup(self):
          super().setup()
@@ -90,16 +97,25 @@ class MLPBlock(nn.Module):
      def __call__(self, x: jax.Array) -> jax.Array:
          input_features = x[-1]
 
-         x = RMSNorm(data_type=self.data_type,name="MLPPrenorm")(x)
-         x = MLPBLockInput(
+         if use_norm:
+             x = RMSNorm(data_type=self.data_type,name="MLPPrenorm")(x)
+         x = DenseGeneral(
              features=self.hidden_dim,
-             use_norm=self.use_norm,
-             use_bias=self.use_bias,
-             name="MLPInput")(x)
-         x = MLPBLockOutput(
+             dtype=self.data_type,
+             weight_dtype=self.weight_dtype,
+             kernel_init=self.kernel_init,
+             name="MLPInp",
+             shard_axes={"MLPInput": self.shard_axes["MLPInp"]},
+             )(x)
+         x = nn.gelu(x)
+         x = DenseGeneral(
              features=self.embedding_dim,
-             use_bias=self.use_bias,
-             name="MLPOutput")(x)
+             dtype=self.data_type,
+             weight_dtype=self.weight_dtype,
+             kernel_init=self.kernel_init,
+             name="MLPOut",
+             shard_axes={"MLPOutput": self.shard_axes["MLPOut"]},
+             )(x)
          return x
 
 class QKVProjection(nn.Module):
@@ -152,6 +168,93 @@ class QKVProjection(nn.Module):
                 name="Knorm",
             )(k)
         return q,k,v
+
+
+class QKVFusedAttnInput(nn.Module):
+    
+    head_dim: int
+    num_heads: int
+    dtype: jnp.dtype
+    weight_dtype : jnp.dtype
+    kernel_init : Callable = nn.initializers.xavier_uniform()
+    bias_init: Callable = nn.initializers.zeros
+    #shard_axes: Optional[Mapping[str, Tuple[str,...]]] = None 
+    shard_axes: Optional[Tuple[str,...]] = None 
+    use_bias: bool = False
+
+    def setup(self):
+        super().setup()
+
+    @nn.compact
+    def __call__(self,x: jax.Array) -> tuple [jax.Array,jax.Array,jax.Array]:
+        qkv = DenseGeneral(
+                (3,self.num_heads,self.head_dim),
+                kernel_init = self.kernel_init,
+                bias_init = self.bias_init,
+                dtype= self.dtype,
+                weight_dtype =  self.weight_dtype,
+                use_bias = self.use_bias,
+                name="QKVProj",
+                shard_axes={"QKVProj": self.shard_axes},
+        )(x)
+        return qkv[:,:,0,...], qkv[:,:,1,...], qkv[:,:,2,...]
+
+
+class AttnInput(nn.Module):
+    
+    head_dim: int
+    num_heads: int
+    dtype: jnp.dtype
+    weight_dtype : jnp.dtype
+    use_bias: bool = False
+    kernel_init : Callable = nn.initializers.xavier_uniform()
+    bias_init: Callable = nn.initializers.zeros
+    shard_axes: Optional[Tuple[str,...]] = None 
+    #shard_axes: Optional[Mapping[str, Tuple[str,...]]] = None 
+
+    def setup(self):
+        super().setup()
+
+    @nn.compact
+    def __call__(self,x: jax.Array) -> tuple [jax.Array,jax.Array,jax.Array]:
+        out = DenseGeneral(
+                (self.num_heads,self.head_dim),
+                kernel_init = self.kernel_init,
+                bias_init = self.bias_init,
+                dtype= self.data_type,
+                weight_dtype = self.weight_dtype,
+                use_bias = self.use_bias,
+                name="AttnInp",
+                shard_axes={"AttnInp": self.shard_axes},
+        )(x)
+        return out 
+
+class KVAttnInput(nn.Module):
+    
+    head_dim: int
+    num_heads: int
+    data_type: jnp.dtype
+    use_bias: bool = False
+    kernel_init : Callable = nn.initializers.xavier_uniform()
+    bias_init: Callable = nn.initializers.zeros
+    #shard_axes: Optional[Mapping[str, Tuple[str,...]]] = None 
+    shard_axes: Optional[Tuple[str,...]] = None 
+
+    def setup(self):
+        super().setup()
+
+    @nn.compact
+    def __call__(self,x: jax.Array) -> tuple [jax.Array,jax.Array,jax.Array]:
+        kv = DenseGeneral(
+                (self.num_heads,self.head_dim),
+                kernel_init = self.kernel_init,
+                bias_init = self.bias_init,
+                dtype= self.data_type,
+                use_bias = self.use_bias,
+                name="KVProj",
+                shard_axes={"KVProj": self.shard_axes},
+        )(x)
+        return kv
 
 class AttnOut(nn.Module):
     features: int
@@ -213,25 +316,242 @@ class MultiHeadAttention(nn.Module):
          #print(x.shape)
          return x
 
-class OutputLayer(nn.Module):
-    num_outputs: int
-    data_type: jnp.dtype = jnp.float16
 
+class GenericAttention(nn.Module):
+    """ Attention layer for Generic LLM
+    
+    attributes:
+      num_heads: int
+      kv_div_factor : int  (query->kv heads ratio)
+      attn_dim: int
+      mesh: jax Mesh
+      attention_kernel: Callable[,...]
+      dtype: activation data type
+      weight_dtype : weight data type
+      attention_bias: bool
+      kernel_init : parameter initializer
+      max_seq_len : maximum sequence length
+      max_prefill_predict_len : maximum prefill sequence length in append phase
+      dropout_rate: float = 0
+      shard_axes: Mapping[str, Tuple[str,...]]
+
+    """
+
+    num_heads : int
+    kv_div_factor: int
+    attn_dim: int
+    dtype: jnp.dtype
+    weight_dtype: jnp.dtype
+    attention_bias: bool
+    max_seq_len : int
+    dropout_rate: float = 0.0
+    qkv_bias: bool = False
+    max_prefill_predict_len: int  = -1
+    shard_axes : Optional[Mapping[str,Tuple[str,...]]] = None
+    kernel_init: Callable = nn.initializers.variance_scaling(1.0,"fan_in","normal")
+    attention_kernel: Callable[...,nn.Module] | None = None
+
+
+    prefill_dim_order: tuple = (1,2,0,3)
+    append_dim_order: tuple = (1,2,0,3)
+    compute_dim_order: tuple = (0,1,2,3)
+
+    mask_value = -0.7 ** float(np.finfo(np.dtype("float32")).max)
 
     def setup(self):
         super().setup()
+        self._cache: kvcache(self.max_seq_len,
+            self.max_prefill_predict_len,
+            self.shard_axes["prefill_axis"],
+            self.shard_axes["append_axis"],
+            prefill_dim_order,
+            append_dim_order,
+            self.dtype
+        )
+
+
+    def generate_attention_mask(self, query, key, decoder_segment_ids: jax.Array | None, mode: str) -> jax.Array | None:
+    
+        mask = None
+        if mode == "append":
+            mask = decoder_segment_ids[:, None, None, None, :] == 1
+        elif decoder_segment_ids is not None:
+            mask = decoder_segment_ids[:, :, None] == decoder_segment_ids[:, None, :]
+            mask = mask[:, None, None, :, :]
+
+        causal_mask = None
+        # We enforce causality except for append
+        if mode != "append":
+            _, q_seq_len, _, _ = query.shape
+            _, kv_seq_len, _, _ = key.shape
+            mask_shape = (q_seq_len, kv_seq_len)
+            row_ids = jax.lax.broadcasted_iota(jnp.int32, mask_shape, 0)
+            col_ids = jax.lax.broadcasted_iota(jnp.int32, mask_shape, 1)
+            causal_mask = (col_ids <= row_ids)[None, None, None, :, :]
+
+        output_mask = None
+
+        if (mask is not None) and (causal_mask is not None):
+            output_mask = jnp.logical_and(mask, causal_mask)
+        elif mask is not None:
+            output_mask = mask
+        elif causal_mask is not None:
+            output_mask = causal_mask
+
+        return jnp.where(output_mask, 0.0, self.mask_value) if output_mask is not None else None
+
+    
+    def apply_dot_product_attention(
+        self,
+        query: jax.Array,
+        key: jax.Array,
+        value: jax.Array,
+        decoder_segment_ids: jax.Array,
+        mode: str = "prefill"
+        ):
+        """Apply dot product Attention."""
+
+        q_seq_len = query.shape[1]
+        #batch, seqlen, num_heads, attn_dim
+        b, s, h, d = query.shape
+        #query->kv heads
+        n_kv = key.shape[-2]
+        assert(n_kv == self.kv_div_factor)
+        if mode == "training" or self.compute_dim_order == (0, 1, 2, 3):
+            query = jnp.reshape(query, (b, s, n_kv, h // n_kv, d))
+            if self.reshape_q and q_seq_len == 1:
+                query = jnp.broadcast_to(query, (b, 2, n_kv, h // n_kv, d))
+            attn_weights = einsum("bskgd,bskd->bkgss", query, key)
+        elif self.compute_dim_order == (0, 2, 1, 3):
+            query = jnp.transpose(query, axes=self.compute_dim_order)
+            key = jax.tree.map(lambda x: jnp.transpose(x, axes=self.compute_dim_order), key)
+            query = jnp.reshape(query, (b, n_kv, n // n_kv, s, d))
+            if self.reshape_q and q_seq_len == 1:
+                query = jnp.broadcast_to(query, (b, n_kv, n // n_kv, 2, d))
+            attn_weights = einsum("bkgsd,bksd->bkgss", query, key)
+
+        attn_weights = attn_weights.astype(jnp.float32)
+        attn_mask = self.generate_attention_mask(query, key, decoder_segment_ids, mode)
+        if attn_mask is not None:
+            #attn_weights = apply_mask_to_logits(attn_weights, attn_mask)
+            attn_weights = jnp.where((attn_mask >= self.mask_value * 0.5), attn_weights, self.mask_value)
+
+        ##softmax
+        _max = jnp.max(attn_weights, axis=-1,keepdims=True)
+        _exp = jnp.exp(attn_weights-_max)
+        _sum = jnp.sum(_exp,axis=-1,keepdims=True)
+
+        _sum = jnp.moveaxis(_sum,-2,1)
+        _max = jnp.moveaxis(_max,-2,1)
+
+        _max = jnp.reshape(_max,(_max.shape[0],_max.shape[1],_max.shape[2]*_max.shahpe[3],1))
+        _sum = jnp.reshape(_sum,(_sum.shape[0],_sum.shape[1],_sum.shape[2]*_sum.shahpe[3],1))
+
+        ##P = SV
+        if mode == "training"  or self.compute_dim_order == (0, 1, 2, 3):
+            out = einsum("bkgss,bskd->bskgd", attn_weights, value)
+            b, s, n_kv, h, d = out.shape
+            result = jnp.reshape(out, (b, s, n_kv * h, d))
+        elif self.compute_dim_order == (0, 2, 1, 3):
+            value = jax.tree.map(lambda x: jnp.transpose(x, axes=self.compute_dim_order), value)
+            out = einsum("bkgss,bksd->bkgsd", attn_weights, value)
+            b, n_kv, g, s, d = out.shape
+            result = jnp.reshape(out, (b, n_kv * g, s, d))
+            result = jax.numpy.moveaxis(result, (0, 1, 2, 3), self.compute_dim_order)
+        return result
 
     @nn.compact
-    def __call__(self,x: jax.Array) -> jax.Array:
+    def __call__(
+        self,
+        x_q: jax.Array,
+        x_kv: jax.Array,
+        x_position: jax.Array,
+        decoder_segment_ids: jax.Array | None = None,
+        *,
+        mode: Literal["training","prefill","append"] = "prefill",
+        deterministic: bool = False,
+        ):
 
-        x = RMSNorm(
-            dtype=self.data_type,
-            )(x)
-        x = Dense(
-            features=self.num_ouputs,
-            dtype=self.data_type,
-            )(x)
-        return x
+        """
+          Attention layer consists of QKV projection + attention layer + Out projection
+
+          inputs: 
+           x_q: input queries of shape [batch,seqlen,heads,attn_dim]
+           q_kv: input [key,value] of shape [batch, seqlen, heads, attn_dim]
+           mode: training or inference
+           deterministic: disables dropout if set to True
+
+          returns:
+           output  of shape [batch, length, heads, attn_dim]
+        """
+
+        ##fused QKV implementation
+        q,k,v = QKVFusedAttnInput(
+            head_dim=self.attn_dim,
+            num_heads=self.num_heads,
+            dtype=self.dtype,
+            weight_dtype=self.weight_dtype,
+            kernel_init = self.kernel_init,
+            use_bias=self.qkv_bias,
+            shard_axes=self.shard_axes["QKVProj"],
+        )(x_q)
+
+        ## apply ROPE 
+        q_rope = RotaryPositionalEncoding(
+            embedding_dim = self.attn_dim,
+            min_timescale = self.rope_min_timescale,
+            max_timescale = self.rope_max_timescale,
+            name = "Qrope")(q,x_position)
+
+        k_rope = RotaryPositionalEncoding(
+            embedding_dim = self.attn_dim,
+            min_timescale = self.rope_min_timescale,
+            max_timescale = self.rope_max_timescale,
+            name = "Krope")(k,x_position)
+
+        # map sharding axes to activations
+
+        q_rope = nn.with_logical_constraint(q_rope,self.shard_axes["Qrope"])
+        k_rope = nn.with_logical_constraint(k_rope,self.shard_axes["Krope"])
+        v  = nn.with_logical_constraint(v,self.shard_axes["Vrope"])
+
+
+        prefill_kvcache, append_kvcache = self._cache(q_rope,k_rope,v,decoder_segment_ids,mode)
+        ##call flashattention 
+        if mode == "prefill":
+            prefill_out,prefill_max,prefill_sum = self.apply_dot_product_attention(query=q_rope,
+                key=prefill_kvcache[0],
+                value=prefill_kvcache[1],
+                decoder_segment_ids=prefill_kvcache[2],
+                lengths=None,
+                mode=mode
+            )
+            if prefill_out is not None:
+                out =  normalize_attention(prefill_out,prefill_max,prefill_sum)
+        elif mode == "append":
+            append_out,append_max,append_sum = self.apply_dot_product_attention(query=q_rope,
+                key=append_kvcache[0],
+                value=append_kvcache[1],
+                decoder_segment_ids=append_kvcache[2],
+                lengths=append_kvcache[3],
+                mode=mode,
+            )
+            if append_out is not None:
+                out =  normalize_attention(append_out,append_max,append_sum)
+        else:
+            raise valueError(f"unsupported mode {mode}")
+
+        out = nn.with_logical_constraint(out,self.shard_axes["AttnOut"])
+
+        out = DenseGeneral(
+            features = self.out[-1],
+            shard_axes=self.shard_axes["AttnOut"],
+            kernel_init=self.kernel_init,
+            name="AttnOut",
+            dtype=self.dtype,
+            weight_dtype=self.weight_dtype,
+            axis=(-2,-1))(out)
+        return out
 
 class TransformerBlock(nn.Module):
     embedding_dim: int = 1024
@@ -261,13 +581,16 @@ class TransformerBlock(nn.Module):
         attn_out = Dropout(rate=self.dropout_rate, deterministic=not self.train)(attn_out)
         x = x + attn_out
         #MLP block
-        mlp_out = MLPBlock(
-            embedding_dim = self.embedding_dim,
-            hidden_dim=self.hidden_dim,
-            use_norm=False,
-            use_bias=True,
-            data_type=self.data_type,
-        )(x)
+        x = RMSNorm(data_type=self.data_type,name="MLPPrenorm")(x)
+        x = MLPBLockInput(
+             features=self.hidden_dim,
+             use_norm=False,
+             use_bias=False,
+             name="MLPInput")(x)
+        x = MLPBLockOutput(
+             features=self.embedding_dim,
+             use_bias=True,
+             name="MLPOutput")(x)
         mlp_out = Dropout(
             rate=self.dropout_rate,
             deterministic = not self.train,
@@ -275,32 +598,25 @@ class TransformerBlock(nn.Module):
         x = x + mlp_out
         return x
 
-class RotaryPositionalEncoding(nn.Module):
-    embedding_dim: int
-    shard_axis_name: str
-    base_exponent: int = 10000
+class OutputLayer(nn.Module):
+    num_outputs: int
+    data_type: jnp.dtype = jnp.float16
+
 
     def setup(self):
-        assert(embedding_dim%2)
-
+        super().setup()
 
     @nn.compact
-    def __call__(self, x: jax.Array) -> jax.Array:
+    def __call__(self,x: jax.Array) -> jax.Array:
 
-        exponents = jnp.arange(0,embedding_dim,2,dtype=x.dtype)
-        ## calculate frequnecy of each token normalized by embedding dimension
-        freq_per_token = (1/ (base_exponent ** (exponents/self.embedding_dim)))
-
-        token = jnp.arange(0,x.shape[1], dtype=x.dtype)
-        token_phase = jnp.einsum("i,j -> ij",token,freq_per_token)
-        token_phase = jnp.tile(token_phase,reps=(1,2))[None,:,None,:]
-        x = x*jnp.cos(token_phase) + jnp.sin(token_phase)*jnp.rotate_half(x)
+        x = RMSNorm(
+            dtype=self.data_type,
+            )(x)
+        x = Dense(
+            features=self.num_ouputs,
+            dtype=self.data_type,
+            )(x)
         return x
-
-    @staticmethod
-    def rotate_half(self, x: jax.Array) -> jax.Array:
-        x1, x2 = jnp.split(x,2, axis=-1)
-        return jnp.concatenate((-x2,x1),axis=-1)
 
 class PositionalEncoding(nn.Module):
   embedding_dim: int
@@ -308,10 +624,10 @@ class PositionalEncoding(nn.Module):
   base_exponent: int = 10000
 
   def __call__(
-      self,
-      x: jax.Array,
-      position: jax.Array,
-  ) -> jax.Array:
+    self,
+    x: jax.Array,
+    position: jax.Array,
+    ) -> jax.Array:
 
     seq_len, num_features = x.shape[-2:]
     tp_size = jax.lax.psum(1, self.shard_axis_name)
@@ -366,7 +682,7 @@ class OldPositionalEncoding(nn.Module):
             pos_emb = jnp.reshape(pos_emb, (seq_len, num_feats))
         else:
             raise ValueError(
-                f"Unknown positional encoding type: {self.config.positional_encoding_type}"
+                f"Unknown positional encoding type: {self.encoding_type}"
             )
         pos_emb = pos_emb.astype(
             x.dtype

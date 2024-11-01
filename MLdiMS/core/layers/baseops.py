@@ -1,7 +1,7 @@
 #Initial version
 
 import functools
-from typing import Any, Dict, Tuple, Callable
+from typing import Any, Dict, Tuple, Callable, Optional, Mapping
 from pprint import pprint
 
 import numpy as np
@@ -10,7 +10,10 @@ from operator import attrgetter
 import flax.linen as nn
 import jax
 import jax.numpy as jnp
-from jax import core
+#from jax import core
+from flax.linen import partitioning as nn_partitioning
+
+import dataclasses
 
 Pytree = Any
 
@@ -34,7 +37,39 @@ def perf(message1,get_attrvalue):
     return decorator
 
 
-class Dense(nn.Dense):
+@dataclasses.dataclass
+class ShardMixIn:
+    """Adds parameter sharding constraints for any flax.linen Module.
+
+    This is a mix-in class that overrides the `param` method of the
+    original Module, to selectively add sharding constraints as specified
+    in `shard_axes`"""
+
+    shard_axes: Optional[Mapping[str, Tuple[str, ...]]] = None
+
+    # Modifies off https://github.com/google/flax/blob/main/flax/linen/partitioning.py#L304
+    def param(self, name: str, *init_args):
+        # Initialize using the original Module's `param` method
+        param = super().param(name, *init_args)
+
+        # If `shard_axes` specified and param name in the dict, apply constraint
+        if self.shard_axes and (name in self.shard_axes.keys()):
+            axes = self.shard_axes[name]
+
+            # Apply the sharding constraint (e.g. axes=('embedding', 'hidden'))
+            param = nn.with_logical_constraint(param, axes)
+
+            # Sow this, to have the AxisMetadata available at initialization.
+            self.sow(
+                "params_axes",
+                f"{name}_axes",
+                nn_partitioning.AxisMetadata(axes),
+                reduce_fn=nn_partitioning._param_with_axes_sow_reduce_fn,
+            )
+
+        return param
+
+class Dense(ShardMixIn,nn.Dense):
     """ A linear dense layer inherited from jax.liner.nn.dense
     Orignal Source code is at
     https://flax.readthedocs.io/en/v0.5.3/_modules/flax/linen/linear.html#Dense
@@ -49,7 +84,7 @@ class Dense(nn.Dense):
         # update cycles 
         return (super().__call__(x))
 
-class Linear(nn.Dense):
+class Linear(ShardMixIn,nn.Dense):
     """ A liner dense layer inherited from jax.liner.nn.dense
     Orignal Source code is at
     https://flax.readthedocs.io/en/v0.5.3/_modules/flax/linen/linear.html#Dense
@@ -76,7 +111,7 @@ class Embed(nn.Embed):
     def __call__(self,x: jax.Array) -> jax.Array:
         return (super().__call__(x))
 
-class RMSNorm(nn.RMSNorm):
+class RMSNorm(ShardMixIn,nn.RMSNorm):
     """
     normalization layer inherited from jax.liner.nn.
     """
@@ -88,7 +123,7 @@ class RMSNorm(nn.RMSNorm):
     def __call__(self,x: jax.Array) -> jax.Array:
         return (super().__call__(x))
 
-class LayerNorm(nn.RMSNorm):
+class LayerNorm(ShardMixIn,nn.LayerNorm):
     """
     normalization layer inherited from jax.liner.nn.
     """
@@ -159,7 +194,7 @@ class dot_product_attention(nn.Module):
        return P
 
 
-class DenseGeneral(nn.DenseGeneral):
+class DenseGeneral(ShardMixIn,nn.DenseGeneral):
     """ linear dense layer with flexible axes inherited from jax.liner.nn.DenseGeneral
     Orignal Source code is at
     https://flax.readthedocs.io/en/v0.5.3/_modules/flax/linen/linear.html#DenseGeneral
@@ -316,3 +351,62 @@ class Dropout(nn.Dropout):
      @nn.compact
      def __call__(self, x: jax.Array) -> jax.Array:
          return super().__call(x)
+
+
+class RotaryPositionalEncoding(nn.Module):
+    embedding_dim: int #attention dim 
+    min_timescale: int
+    max_timescale: int
+
+    def setup(self):
+        assert(self.embedding_dim%2)
+
+        self.timescale = self.min_timescale * (self.max_timescale/self.min_timescale) ** (2 * jnp.arange(0,self.embedding_dim//2) / self.embedding_dim)
+
+    @nn.compact
+    def __call__(self, x: jax.Array, position : jax.Array) -> jax.Array:
+
+        assert(len(x.shape) == 4)  # shape (b,seq_len,n,attn_dim)
+        assert(x.shape[-1] == self.embedding_dim)
+        
+        if position is None:
+            raise ValueError("require positional input")
+
+        ##add two dimensions to position shape for sin,cos
+        position = position[:,:,jnp.newaxis,jnp.newaxis]
+        scaled_postion = position/self.timescale
+        sin_x = jnp.sin(scaled_position).astype(x.dtype)
+        cos_x = jnp.cos(scaled_position).astype(x.dtype)
+        upper_segment, lower_segment = jnp.split(x,2,axis=-1)
+        upper_segment = upper_segment * cos_x - lower_segment* sin_x
+        lower_segment = upper_segment * cos_x + lower_segment* sin_x
+        x_out = jnp.concatenate((upper_segment,lower_segment),axis=-1)
+  
+        return x_out
+
+    @staticmethod
+    def rotate_half(self, x: jax.Array) -> jax.Array:
+        x1, x2 = jnp.split(x,2, axis=-1)
+        return jnp.concatenate((-x2,x1),axis=-1)
+
+# Based on https://github.com/google-research/google-research/blob/master/scaling_transformer_inference_efficiency/attention.py
+def normalize_attention(self, local_outs, local_maxes, local_sums):
+    """Normalize across multiple localized attentions
+
+    Args:
+        local_outs (list): List of unnormalized outputs entries for each local attention
+        local_maxes (list): List of max exponentials entries for each local attention
+        local_sums (list): List of exponential sum entries for each local attention
+
+    Returns:
+        Array: Combined attention that has been normalized
+    """
+    global_max = functools.reduce(jnp.maximum, local_maxes)
+    global_sum = sum(
+        [jnp.exp(local_max - global_max) * local_sum for (local_sum, local_max) in zip(local_sums, local_maxes)]
+    )
+    attn_out = 0
+    for local_max, local_out in zip(local_maxes, local_outs):
+        local_normalizer = jnp.exp(local_max - global_max) / global_sum
+        attn_out += local_normalizer * local_out
+    return attn_out

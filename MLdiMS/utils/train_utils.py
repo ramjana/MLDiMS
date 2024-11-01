@@ -8,7 +8,7 @@ The above copyright notice and this permission notice shall be included in all c
 
 THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 """
-from typing import Any, Callable, Dict, Tuple, Sequence
+from typing import Any, Callable, Dict, Tuple, Sequence, Optional
 
 from ml_collections import ConfigDict
 import jax
@@ -304,3 +304,27 @@ def train_step_tp(
     else:
         metrics = jax.tree_map(jnp.add, metrics, step_metrics)
     return new_state, metrics
+
+def find_multiple(n: int, k: int) -> int:
+    assert k > 0
+    if n % k == 0:
+        return n
+    return n + k - (n % k)
+
+def num_parameters(module: nn.Module, requires_grad: Optional[bool] = None) -> int:
+    total = 0
+    for p in module.parameters():
+        if requires_grad is None or p.requires_grad == requires_grad:
+            if hasattr(p, "quant_state"):
+                # bitsandbytes 4bit layer support
+                total += math.prod(p.quant_state.shape)
+            else:
+                total += p.numel()
+    return total
+
+
+def reset_parameters(module: nn.Module) -> None:
+    """Calls `reset_parameters` on the module and all its submodules."""
+    for mod in module.modules():
+        if callable(getattr(mod, "reset_parameters", None)):
+            mod.reset_parameters()

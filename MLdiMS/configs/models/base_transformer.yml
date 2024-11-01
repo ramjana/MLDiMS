@@ -1,0 +1,106 @@
+#model config for base transformer (llama2-7b)
+mode_name: "base_transformer"
+model_dim: 4096
+num_heads: 32
+num_kv_heads: 32
+hidden_dim: 11008
+num_layers: 32
+attn_dim: 128
+mlp_activations: ["silu","linear"]
+enable_dropout: False
+logits_via_embedding: False
+normalization_layer_epsilon: 1.0e-5
+decoder_block: "base"
+dtype: "float16"
+weight_dtype: "float16"
+attention_bias: False
+dropout_rate: 0.0
+qkv_bias: False
+
+#use HF weights  or random init state
+parameters_path: ""
+
+activation_dtype: "fp16"
+
+scan_layers: True
+param_scan_axis: 1
+
+fused_qkv: True
+fused_mlp: False
+
+output_dir: ""
+
+hardware: "cpu"
+
+mesh_axes: ['data', 'fsdp','sequence', 'tensor', 'append']
+logical_axis_rules: [
+                       ['act_batch', ['data','fsdp']],
+                       ['act_heads', ['tensor','sequence']],
+                       ['act_kv_heads', ['tensor','sequence']],
+                       ['act_embed_dim',['tensor']],
+                       ['act_seqlen',['sequence']],
+                       ['act_mlp',['tensor']],
+                       ['act_kv',['tensor']],
+                       ['act_kv_batch',['data','fsdp']],
+                       ['act_kv_headdim',['tensor']],
+                       ['act_vocab',['tensor','sequence']],
+                       ['mlp',['tensor','append']],
+                       ['vocab',['tensor','append']],
+                       ['embed',['fsdp','append']],
+                       ['norm',['tensor']],
+                       ['heads',['tensor','append']],
+                       ['kv',[]],
+                       ['qkv',[]],
+                       ['kv_heads',['tensor','append']],
+                       ['kv_head_dim',[]],
+                       ['kvcache_batch',[]],
+                       ['kvcache_heads',['append','tensor']],
+                       ['kvcache_kv',[]],
+                       ['kvcache_seqlen',[]],
+                    ]
+
+data_sharding: [['data','fsdp','tensor', 'append']]
+
+data_parallelism: 1
+fsdp_parallelism: 1
+tensor_parallelism: 1
+append_parallelism: 1
+sequence_parallelism: 1
+pipeline_parallelism: 1
+
+num_slices: 1
+
+vocab_size: 32_000  #powers of 2 sharding
+tokenizer_path: "tokenizers/tokenizer_llama3.tiktoken"
+add_bos: True
+add_eos: True
+
+tokenize_eval_data: True
+
+#Training parameter
+steps: 10
+learning_rate: 3.e-5
+cosine_learning_rate_final_fraction: 0.1
+warmup_steps_fraction: 0.1
+learning_rate_schedule_steps: -1
+
+log_period: 100 
+
+learning_rate: 3.e-5
+learning_rate_schedule_steps: -1
+
+max_seq_length: 2048
+max_prefill_predict_len: 64  #maximum  length for the prefill for append phase
+
+#Rope parameters
+rope_min_timescale: 1
+rope_max_timescale: 10_000
+
+
+
+#inference
+inference_prefill_lengths: "256,512,1024,2048"
+inference_stages: "prefill,append"
+inference_loop_iters: 10
+
+compute_dim_order: "0,1,2,3"
