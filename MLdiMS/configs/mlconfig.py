@@ -54,7 +54,7 @@ class _mlconfig:
 
         self.update_config_command_line(config_keys,config_from_yaml, userArgs, **kwargs)
 
-        print(config_keys)
+        #print(config_keys)
         if config_keys["learning_rate_schedule_steps"] == -1:
             config_keys["learning_rate_schedule_steps"] = config_keys["steps"]
         if config_keys["steps"] == -1:
@@ -75,6 +75,9 @@ class _mlconfig:
         config_keys["logical_axis_rules"] = lists_to_tuples(config_keys["logical_axis_rules"])
         config_keys["data_sharding"] = lists_to_tuples(config_keys["data_sharding"])          
 
+        config_keys["max_prefill_predict_len"] = int(config_keys["max_prefill_predict_len"])
+        config_keys["max_seq_length"] = int(config_keys["max_seq_length"])
+
         if not os.path.isfile(config_keys['tokenizer_path']):
             dir_path = os.path.dirname(os.path.realpath(__file__))
             tokenizer_path= os.path.join(
@@ -84,8 +87,8 @@ class _mlconfig:
                 config_keys['tokenizer_path'] = tokenizer_path
  
         self.configKeys = config_keys
-        for key,value in config_keys.items():
-           print(f"Config param {key} : {value}")
+        #for key,value in config_keys.items():
+        #   print(f"Config param {key} : {value}")
 
                     
 

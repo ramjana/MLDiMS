@@ -66,9 +66,10 @@ class TikTokenTokenizer:
       self,
       s: str,
       *,
+      prefill_lengths: int,
       allowed_special: Union[Literal["all"], Collection[str]] = (),
       disallowed_special: Union[Literal["all"], Collection[str]] = (),
-  ) -> List[int]:
+  ):
     """
     Encodes a string into a list of token IDs.
 
@@ -78,6 +79,7 @@ class TikTokenTokenizer:
         eos (bool): Whether to append the end-of-sequence token.
         allowed_tokens ("all"|set[str]): allowed special tokens in string
         disallowed_tokens ("all"|set[str]): special tokens that raise an error when in string
+        prefill_lengths
 
     Returns:
         list[int]: A list of token IDs.
@@ -117,11 +119,15 @@ class TikTokenTokenizer:
               disallowed_special=disallowed_special,
           )
       )
+
     if self.bos:
       t.insert(0, self.bos_id)
+    if (len(t) < prefill_lengths):
+      for _ in range(prefill_lengths-len(t)):
+          t.append(self.pad_id)
     if self.eos:
       t.append(self.eos_id)
-    return t
+    return t,len(t)-2
 
   def decode(self, t) -> str:
     """
@@ -164,7 +170,7 @@ class TikTokenTokenizer:
 def build_tokenizer(tokenizer_path, add_bos, add_eos):
   """Loads the tokenizer at `tokenizer_path`"""
   print(f"Tokenizer path: {tokenizer_path}")
-    return TikTokenTokenizer(tokenizer_path, add_bos, add_eos)
+  return TikTokenTokenizer(tokenizer_path, add_bos, add_eos)
 
 
 def get_tokenizer(tokenizer_path, add_bos, add_eos):

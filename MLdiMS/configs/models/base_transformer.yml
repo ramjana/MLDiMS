@@ -9,7 +9,7 @@ attn_dim: 128
 mlp_activations: ["silu","linear"]
 enable_dropout: False
 logits_via_embedding: False
-normalization_layer_epsilon: 1.0e-5
+normalization_epsilon: 1.0e-5
 decoder_block: "base"
 dtype: "float16"
 weight_dtype: "float16"
@@ -19,6 +19,9 @@ qkv_bias: False
 
 #use HF weights  or random init state
 parameters_path: ""
+
+
+  
 
 activation_dtype: "fp16"
 
@@ -67,7 +70,7 @@ tensor_parallelism: 1
 append_parallelism: 1
 sequence_parallelism: 1
 pipeline_parallelism: 1
-
+num_devices: 1
 num_slices: 1
 
 vocab_size: 32_000  #powers of 2 sharding
@@ -83,6 +86,8 @@ learning_rate: 3.e-5
 cosine_learning_rate_final_fraction: 0.1
 warmup_steps_fraction: 0.1
 learning_rate_schedule_steps: -1
+micro_batch_size_to_train_on: 4 
+per_device_batch_size: 16
 
 log_period: 100 
 
@@ -104,3 +109,5 @@ inference_stages: "prefill,append"
 inference_loop_iters: 10
 
 compute_dim_order: "0,1,2,3"
+
+prompt: "i love to"

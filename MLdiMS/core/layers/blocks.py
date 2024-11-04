@@ -18,6 +18,7 @@ from .baseops import (
         AttnOutput,
         SinusoidalPositionalEncoding,
         LearnedPositionalEncoding,
+        RotaryPositionalEncoding,
         dot_product_attention,
         softmax,
         Embed,
@@ -27,7 +28,7 @@ from .baseops import (
         ShardMixIn
     )
 
-from .kvcache import kvcache
+from core.layers.kvcache import kvcache
 
 
 ##MLPBlock building block of the transformer
@@ -87,7 +88,8 @@ class MLPBlock(nn.Module):
      weight_dtype: jnp.dtype
      use_norm: bool = False
      use_bias: bool = True
-     shard_axes: Optional[Mapping[str,Tuple[str,...]]] = None
+     in_shard_axes: Optional[Tuple[str,...]] = None
+     out_shard_axes: Optional[Tuple[str,...]] = None
      kernel_init : Callable = nn.initializers.xavier_uniform()
 
      def setup(self):
@@ -97,24 +99,24 @@ class MLPBlock(nn.Module):
      def __call__(self, x: jax.Array) -> jax.Array:
          input_features = x[-1]
 
-         if use_norm:
+         if self.use_norm:
              x = RMSNorm(data_type=self.data_type,name="MLPPrenorm")(x)
          x = DenseGeneral(
              features=self.hidden_dim,
              dtype=self.data_type,
-             weight_dtype=self.weight_dtype,
+             param_dtype=self.weight_dtype,
              kernel_init=self.kernel_init,
              name="MLPInp",
-             shard_axes={"MLPInput": self.shard_axes["MLPInp"]},
+             shard_axes={"MLPInp": self.in_shard_axes},
              )(x)
          x = nn.gelu(x)
          x = DenseGeneral(
              features=self.embedding_dim,
              dtype=self.data_type,
-             weight_dtype=self.weight_dtype,
+             param_dtype=self.weight_dtype,
              kernel_init=self.kernel_init,
              name="MLPOut",
-             shard_axes={"MLPOutput": self.shard_axes["MLPOut"]},
+             shard_axes={"MLPOut": self.out_shard_axes},
              )(x)
          return x
 
@@ -192,7 +194,7 @@ class QKVFusedAttnInput(nn.Module):
                 kernel_init = self.kernel_init,
                 bias_init = self.bias_init,
                 dtype= self.dtype,
-                weight_dtype =  self.weight_dtype,
+                param_dtype =  self.weight_dtype,
                 use_bias = self.use_bias,
                 name="QKVProj",
                 shard_axes={"QKVProj": self.shard_axes},
@@ -222,7 +224,7 @@ class AttnInput(nn.Module):
                 kernel_init = self.kernel_init,
                 bias_init = self.bias_init,
                 dtype= self.data_type,
-                weight_dtype = self.weight_dtype,
+                param_dtype = self.weight_dtype,
                 use_bias = self.use_bias,
                 name="AttnInp",
                 shard_axes={"AttnInp": self.shard_axes},
@@ -307,13 +309,11 @@ class MultiHeadAttention(nn.Module):
          x = dot_product_attention(
              q,k,v,self.mask,
              )(x)
-         #print(x.shape)
          x = AttnOutput(
              features=features,
              data_type = self.data_type,
              name="AttnOut",
          )(x)
-         #print(x.shape)
          return x
 
 
@@ -344,6 +344,8 @@ class GenericAttention(nn.Module):
     weight_dtype: jnp.dtype
     attention_bias: bool
     max_seq_len : int
+    rope_min_timescale: int
+    rope_max_timescale: int
     dropout_rate: float = 0.0
     qkv_bias: bool = False
     max_prefill_predict_len: int  = -1
@@ -360,12 +362,12 @@ class GenericAttention(nn.Module):
 
     def setup(self):
         super().setup()
-        self._cache: kvcache(self.max_seq_len,
+        self._cache = kvcache(self.max_seq_len,
             self.max_prefill_predict_len,
             self.shard_axes["prefill_axis"],
             self.shard_axes["append_axis"],
-            prefill_dim_order,
-            append_dim_order,
+            self.prefill_dim_order,
+            self.append_dim_order,
             self.dtype
         )
 
@@ -382,8 +384,8 @@ class GenericAttention(nn.Module):
         causal_mask = None
         # We enforce causality except for append
         if mode != "append":
-            _, q_seq_len, _, _ = query.shape
-            _, kv_seq_len, _, _ = key.shape
+            q_seq_len = query.shape[1]
+            kv_seq_len = key.shape[1]
             mask_shape = (q_seq_len, kv_seq_len)
             row_ids = jax.lax.broadcasted_iota(jnp.int32, mask_shape, 0)
             col_ids = jax.lax.broadcasted_iota(jnp.int32, mask_shape, 1)
@@ -400,7 +402,7 @@ class GenericAttention(nn.Module):
 
         return jnp.where(output_mask, 0.0, self.mask_value) if output_mask is not None else None
 
-    
+    #@functools.partial(jax.jit, static_argnums=(2,3))
     def apply_dot_product_attention(
         self,
         query: jax.Array,
@@ -413,22 +415,20 @@ class GenericAttention(nn.Module):
 
         q_seq_len = query.shape[1]
         #batch, seqlen, num_heads, attn_dim
-        b, s, h, d = query.shape
+        b, t, h, d = query.shape
         #query->kv heads
-        n_kv = key.shape[-2]
+        #complaining about shape attribute not available for key variable
+        #n_kv = key.shape[-2]
+        n_kv = self.kv_div_factor
         assert(n_kv == self.kv_div_factor)
         if mode == "training" or self.compute_dim_order == (0, 1, 2, 3):
-            query = jnp.reshape(query, (b, s, n_kv, h // n_kv, d))
-            if self.reshape_q and q_seq_len == 1:
-                query = jnp.broadcast_to(query, (b, 2, n_kv, h // n_kv, d))
-            attn_weights = einsum("bskgd,bskd->bkgss", query, key)
+            query = jnp.reshape(query, (b, t, n_kv, h // n_kv, d))
+            attn_weights = jnp.einsum("btkgd,bskd->bkgts", query, key)
         elif self.compute_dim_order == (0, 2, 1, 3):
             query = jnp.transpose(query, axes=self.compute_dim_order)
             key = jax.tree.map(lambda x: jnp.transpose(x, axes=self.compute_dim_order), key)
-            query = jnp.reshape(query, (b, n_kv, n // n_kv, s, d))
-            if self.reshape_q and q_seq_len == 1:
-                query = jnp.broadcast_to(query, (b, n_kv, n // n_kv, 2, d))
-            attn_weights = einsum("bkgsd,bksd->bkgss", query, key)
+            query = jnp.reshape(query, (b, n_kv, n // n_kv, t, d))
+            attn_weights = jnp.einsum("bkgtd,bksd->bkgts", query, key)
 
         attn_weights = attn_weights.astype(jnp.float32)
         attn_mask = self.generate_attention_mask(query, key, decoder_segment_ids, mode)
@@ -444,21 +444,21 @@ class GenericAttention(nn.Module):
         _sum = jnp.moveaxis(_sum,-2,1)
         _max = jnp.moveaxis(_max,-2,1)
 
-        _max = jnp.reshape(_max,(_max.shape[0],_max.shape[1],_max.shape[2]*_max.shahpe[3],1))
-        _sum = jnp.reshape(_sum,(_sum.shape[0],_sum.shape[1],_sum.shape[2]*_sum.shahpe[3],1))
+        _max = jnp.reshape(_max,(_max.shape[0],_max.shape[1],_max.shape[2]*_max.shape[3],1))
+        _sum = jnp.reshape(_sum,(_sum.shape[0],_sum.shape[1],_sum.shape[2]*_sum.shape[3],1))
 
         ##P = SV
         if mode == "training"  or self.compute_dim_order == (0, 1, 2, 3):
-            out = einsum("bkgss,bskd->bskgd", attn_weights, value)
-            b, s, n_kv, h, d = out.shape
-            result = jnp.reshape(out, (b, s, n_kv * h, d))
+            out = jnp.einsum("bkgts,bskd->btkgd", attn_weights, value)
+            b, t, n_kv, h, d = out.shape
+            result = jnp.reshape(out, (b, t, n_kv * h, d))
         elif self.compute_dim_order == (0, 2, 1, 3):
             value = jax.tree.map(lambda x: jnp.transpose(x, axes=self.compute_dim_order), value)
-            out = einsum("bkgss,bksd->bkgsd", attn_weights, value)
+            out = jnp.einsum("bkgts,bksd->bkgtd", attn_weights, value)
             b, n_kv, g, s, d = out.shape
             result = jnp.reshape(out, (b, n_kv * g, s, d))
             result = jax.numpy.moveaxis(result, (0, 1, 2, 3), self.compute_dim_order)
-        return result
+        return result,_max,_sum
 
     @nn.compact
     def __call__(
@@ -468,7 +468,7 @@ class GenericAttention(nn.Module):
         x_position: jax.Array,
         decoder_segment_ids: jax.Array | None = None,
         *,
-        mode: Literal["training","prefill","append"] = "prefill",
+        mode: Literal["training","Prefill","append"] = "prefill",
         deterministic: bool = False,
         ):
 
@@ -516,14 +516,13 @@ class GenericAttention(nn.Module):
         v  = nn.with_logical_constraint(v,self.shard_axes["Vrope"])
 
 
-        prefill_kvcache, append_kvcache = self._cache(q_rope,k_rope,v,decoder_segment_ids,mode)
+        prefill_kvcache, append_kvcache = self._cache(q_rope,k_rope,decoder_segment_ids,mode)
         ##call flashattention 
         if mode == "prefill":
             prefill_out,prefill_max,prefill_sum = self.apply_dot_product_attention(query=q_rope,
                 key=prefill_kvcache[0],
                 value=prefill_kvcache[1],
                 decoder_segment_ids=prefill_kvcache[2],
-                lengths=None,
                 mode=mode
             )
             if prefill_out is not None:
@@ -542,14 +541,13 @@ class GenericAttention(nn.Module):
             raise valueError(f"unsupported mode {mode}")
 
         out = nn.with_logical_constraint(out,self.shard_axes["AttnOut"])
-
         out = DenseGeneral(
-            features = self.out[-1],
-            shard_axes=self.shard_axes["AttnOut"],
+            features = x_q.shape[-1],
             kernel_init=self.kernel_init,
             name="AttnOut",
+            shard_axes={"AttnOut":self.shard_axes["AttnOut"]},
             dtype=self.dtype,
-            weight_dtype=self.weight_dtype,
+            param_dtype=self.weight_dtype,
             axis=(-2,-1))(out)
         return out
 

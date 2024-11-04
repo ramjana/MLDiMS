@@ -359,7 +359,7 @@ class RotaryPositionalEncoding(nn.Module):
     max_timescale: int
 
     def setup(self):
-        assert(self.embedding_dim%2)
+        assert(self.embedding_dim%2 == 0)
 
         self.timescale = self.min_timescale * (self.max_timescale/self.min_timescale) ** (2 * jnp.arange(0,self.embedding_dim//2) / self.embedding_dim)
 
@@ -374,7 +374,7 @@ class RotaryPositionalEncoding(nn.Module):
 
         ##add two dimensions to position shape for sin,cos
         position = position[:,:,jnp.newaxis,jnp.newaxis]
-        scaled_postion = position/self.timescale
+        scaled_position = position/self.timescale
         sin_x = jnp.sin(scaled_position).astype(x.dtype)
         cos_x = jnp.cos(scaled_position).astype(x.dtype)
         upper_segment, lower_segment = jnp.split(x,2,axis=-1)
@@ -390,7 +390,7 @@ class RotaryPositionalEncoding(nn.Module):
         return jnp.concatenate((-x2,x1),axis=-1)
 
 # Based on https://github.com/google-research/google-research/blob/master/scaling_transformer_inference_efficiency/attention.py
-def normalize_attention(self, local_outs, local_maxes, local_sums):
+def normalize_attention(local_outs, local_maxes, local_sums):
     """Normalize across multiple localized attentions
 
     Args:
