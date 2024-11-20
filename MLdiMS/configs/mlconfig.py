@@ -29,6 +29,8 @@ def get_num_slices():
 _config = None
 config = None
 
+_hw_config = None
+hw_config = None
 
 class _mlconfig:
 
@@ -77,6 +79,15 @@ class _mlconfig:
 
         config_keys["max_prefill_predict_len"] = int(config_keys["max_prefill_predict_len"])
         config_keys["max_seq_length"] = int(config_keys["max_seq_length"])
+
+        config_keys["normalization_epsilon"]  = float(config_keys["normalization_epsilon"])
+
+        config_keys["fsdp_modules"] = lists_to_tuples(config_keys["fsdp_modules"])
+
+        config_keys["num_devices"] = int(config_keys["num_devices"])
+        config_keys["data_parallelism"] = int(config_keys["data_parallelism"])
+        config_keys["device_batch_size"] = int(config_keys["device_batch_size"])
+        config_keys["max_batch_size"]  = config_keys["data_parallelism"]*config_keys["device_batch_size"]
 
         if not os.path.isfile(config_keys['tokenizer_path']):
             dir_path = os.path.dirname(os.path.realpath(__file__))

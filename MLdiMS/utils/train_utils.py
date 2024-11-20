@@ -232,12 +232,13 @@ def loss_fn_tp(
     apply_fn: Any,
     batch: Batch,
     rng: jax.Array,
-    config: ConfigDict,
+    data_axis_name: str,
+    model_axis_name: str,
 ) -> Tuple[jax.Array, Dict[str, Any]]:
     # Since dropout masks vary across the batch dimension, we want each device to generate a
     # different mask. We can achieve this by folding the rng over the data axis, so that each
     # device gets a different rng and thus mask.
-    dropout_rng = fold_rng_over_axis(rng, (config.data_axis_name, config.model_axis_name))
+    dropout_rng = fold_rng_over_axis(rng, (data_axis_name, model_axis_name))
     # Remaining computation is the same as before for single device.
     logits = apply_fn(
         {"params": params},
@@ -249,7 +250,7 @@ def loss_fn_tp(
     correct_pred = jnp.equal(jnp.argmax(logits, axis=-1), batch.labels)
     batch_size = np.prod(batch.labels.shape)
     # Mask out loss and accuracy for model devices except first one.
-    model_idx = jax.lax.axis_index(config.model_axis_name)
+    model_idx = jax.lax.axis_index(model_axis_name)
     loss = jnp.where(model_idx != 0, 0.0, loss)
     correct_pred = jnp.where(model_idx != 0, False, correct_pred)
     batch_size = jnp.where(model_idx != 0, 0, batch_size)
@@ -277,7 +278,9 @@ def train_step_tp(
     state: TrainState,
     metrics: Metrics | None,
     batch: Batch,
-    config:ConfigDict,
+    model_axis_name: str,
+    data_axis_name: str,
+    num_minibatches: int,
     loss_fn: Callable = loss_fn_tp,
 ) -> Tuple[TrainState, Metrics]:
     rng, step_rng = jax.random.split(state.rng)
@@ -285,18 +288,18 @@ def train_step_tp(
         state,
         batch,
         step_rng,
-        config.optimizer.num_minibatches,
-        loss_fn=functools.partial(loss_fn,config=config),
+        num_minibatches,
+        loss_fn=functools.partial(loss_fn,data_axis_name=data_axis_name,model_axis_name=model_axis_name)
     )
     # Update parameters. We need to sync the gradients across devices before updating.
     with jax.named_scope("sync_gradients"):
-        grads = sync_gradients(grads, (config.data_axis_name, config.model_axis_name))
+        grads = sync_gradients(grads, (data_axis_name, model_axis_name))
     new_state = state.apply_gradients(grads=grads, rng=rng)
     # Sum metrics across replicas. Alternatively, we could keep the metrics separate
     # and only synchronize them before logging. For simplicity, we sum them here.
     with jax.named_scope("sync_metrics"):
         step_metrics = jax.tree_map(
-            lambda x: jax.lax.psum(x, axis_name=(config.data_axis_name, config.model_axis_name)),
+            lambda x: jax.lax.psum(x, axis_name=(data_axis_name, model_axis_name)),
             step_metrics,
         )
     if metrics is None:

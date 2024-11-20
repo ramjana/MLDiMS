@@ -28,6 +28,10 @@ class Config:
     rotary_percentage: float = 0.25
     parallel_residual: bool = True
     bias: bool = True
+    rms_norm_eps: float = 1e-05
+    bos_token_id: int = 1
+    eos_token_id: int = 2
+    hidden_act: Literal["silu","gelu"] = "silu"
     lm_head_bias: bool = False
     n_query_groups: Optional[int] = None
     shared_attention_norm: bool = False
@@ -42,6 +46,7 @@ class Config:
     rope_base: int = 10000
     rope_adjustments: Optional[dict] = None
     n_expert: int = 0
+    dtype: torch.dtype = torch.float16
     n_expert_per_token: int = 0
     attention_logit_softcapping: Optional[float] = None
     final_logit_softcapping: Optional[float] = None
@@ -148,12 +153,20 @@ llama_2 = [
     dict(
         name="Llama-2-7b{}-hf",
         hf_config=dict(org="meta-llama", name="Llama-2-7b{}-hf"),
+        bos_token_id=1,
+        eos_token_id=2,
         vocab_size=32000,
         padding_multiple=64,
+        initializer_range=0.02,
         n_layer=32,
+        n_head=32,
+        n_embed=4096,
+        hidden_act="silu",
+        rms_norm_rps=1e-05,
         rotary_percentage=1.0,
         parallel_residual=False,
         bias=False,
+        dtype=torch.float16,
         norm_class_name="RMSNorm",
         mlp_class_name="LLaMAMLP",
         intermediate_size=11008,
@@ -162,6 +175,8 @@ llama_2 = [
     dict(
         name="Llama-2-13b{}-hf",
         hf_config=dict(org="meta-llama", name="Llama-2-13b{}-hf"),
+        bos_token_id=1,
+        eos_token_id=2,
         vocab_size=32000,
         padding_multiple=64,
         n_layer=40,
@@ -171,6 +186,8 @@ llama_2 = [
         parallel_residual=False,
         bias=False,
         norm_class_name="RMSNorm",
+        hidden_act="silu",
+        rms_norm_rps=1e-05,
         mlp_class_name="LLaMAMLP",
         intermediate_size=13824,
     ),

@@ -127,12 +127,13 @@ def loss_fn_transformer(
     apply_fn: Any,
     batch: Batch,
     rng: jax.Array,
-    config: ConfigDict,
+    data_axis_name: str,
+    model_axis_name: str
 ) -> Tuple[jax.Array, Dict[str, Any]]:
     # Since dropout masks vary across the batch dimension, we want each device to generate a
     # different mask. We can achieve this by folding the rng over the data axis, so that each
     # device gets a different rng and thus mask.
-    dropout_rng = fold_rng_over_axis(rng, (config.data_axis_name, config.model_axis_name))
+    dropout_rng = fold_rng_over_axis(rng, (data_axis_name, model_axis_name))
     # Remaining computation is the same as before for single device.
     logits = apply_fn(
         {"params": params},
@@ -140,7 +141,7 @@ def loss_fn_transformer(
         train=True,
         rngs={"dropout": dropout_rng},
     )
-    labels = split_array_over_mesh(batch.labels, axis_name=config.model_axis_name, split_axis=1)
+    labels = split_array_over_mesh(batch.labels, axis_name=model_axis_name, split_axis=1)
     assert (
         logits.shape[:-1] == labels.shape
     ), f"Logits and labels shapes do not match: {logits.shape} vs {labels.shape}"
@@ -195,7 +196,7 @@ def main():
 
     def init_transformer(rng: jax.random.PRNGKey, x: jax.Array) -> TrainState:
         init_rng, rng = jax.random.split(rng)
-        variables = model_transformer.init({"params" : init_rng}, x, train=False)
+        variables = model_transformer.init({"params" : init_rng}, x, mask=None, train=False)
         #variables = model_transformer.init({"params": init_rng}, x, train=False)
         params = variables.pop("params")
         state = TrainState.create(
@@ -285,9 +286,9 @@ def main():
        shard_map(
            functools.partial(train_step_tp,
                              loss_fn=loss_fn_transformer, 
-                             config=config),
-                             #model_axis_name=config.model_axis_name,
-                             #num_minibatches=config.optimizer.num_minibatches),
+                             model_axis_name=config.model_axis_name,
+                             data_axis_name=config.data_axis_name,
+                             num_minibatches=config.optimizer.num_minibatches),
            mesh,
            in_specs=(state_transformer_specs, P(), P(config.data_axis_name)),
            out_specs=(state_transformer_specs, P()),

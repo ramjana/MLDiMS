@@ -294,7 +294,7 @@ class AttnOutput(nn.Module):
          )(x)
          return x 
 
-class silu(nn.silu):
+class silu(nn.Module):
      """ 
         activation module inherited from jax module
         silu(x) = x*sigmoid(x)
@@ -307,7 +307,7 @@ class silu(nn.silu):
      #@perf("silu",attrgetter('name'),attrgetter('dtype'))
      @nn.compact
      def __call__(self,x : jax.Array) -> jax.Array:
-         return super().__call__(x)
+         return nn.silu(x)
 
 class relu(nn.Module):
      """ 
@@ -355,8 +355,8 @@ class Dropout(nn.Dropout):
 
 class RotaryPositionalEncoding(nn.Module):
     embedding_dim: int #attention dim 
-    min_timescale: int
-    max_timescale: int
+    min_timescale: int = 1
+    max_timescale: int = 10000
 
     def setup(self):
         assert(self.embedding_dim%2 == 0)
@@ -410,3 +410,11 @@ def normalize_attention(local_outs, local_maxes, local_sums):
         local_normalizer = jnp.exp(local_max - global_max) / global_sum
         attn_out += local_normalizer * local_out
     return attn_out
+
+def fadd(x,y):
+    out = x + y
+    return out
+
+def fmul(x,y):
+    out = x * y
+    return out

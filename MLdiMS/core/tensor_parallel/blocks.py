@@ -4,7 +4,7 @@
 
 
 import functools
-from typing import Any, Dict, Tuple, Callable
+from typing import Any, Dict, Tuple, Callable, Optional
 from pprint import pprint
 
 import numpy as np
@@ -40,10 +40,10 @@ class TPMultiHeadAttention(nn.Module):
      use_bias_qkv: bool
      #attention: Callable
      data_type: jnp.dtype
-     train: bool
      shard_axis_name: str
      mask : jax.Array | None = None
      normalize_qk: bool = False
+     train: bool = False   #FIXME deprecate
 
      def setup(self):
          super().setup()

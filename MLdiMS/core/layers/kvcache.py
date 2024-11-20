@@ -2,6 +2,7 @@
 
 import jax
 import flax.linen as nn
+from flax.linen import Variable
 from typing import Any, Dict, Tuple, Callable, Optional, Mapping
 import jax.numpy as jnp
 
@@ -27,6 +28,7 @@ class kvcache(nn.Module):
         Arguments:
           mode : str  prefill or append op
           batch,heads,seqlen,attn_dim :  shape of kv tensor
+          head = kv_heads 
                                      seqlen = for prefill same as max predict length
                                      seqlen = for append  output_token_len - prefill_predict_length
           dtype: tensor elements  data type in kv cache
@@ -93,6 +95,86 @@ class kvcache(nn.Module):
             return cached_key_var, cached_value_var, cached_segment_id_var, cached_lengths_var,cached_index_var
         
         return cached_key_var, cached_value_var, cached_segment_id_var
+
+
+    @nn.compact
+    def llama_kvcache(self,mode: str, batch: int , seqlen: int , heads: int, attn_dim: int):
+        """  basic cache block for inference 
+        Arguments:
+          mode : str  prefill or append op
+          batch,heads,seqlen,attn_dim :  shape of kv tensor
+          head = kv_heads 
+                                     seqlen = for prefill same as max predict length
+                                     seqlen = for append  output_token_len - prefill_predict_length
+          dtype: tensor elements  data type in kv cache
+
+        return variables with shard partitioning
+
+        """ 
+
+        seqlen = self.max_sequence_len
+        kvcache_logical_shape = (batch, seqlen, heads, attn_dim)
+
+
+        key_name = "kvcached_prefill_key" if mode == "prefill" else "kvcached_append_key"
+        value_name = "kvcached_prefill_value" if mode == "prefill" else "kvcached_append_value"
+        shard_axis_name = self.prefill_axis_names if mode == "prefill" else self.append_axis_names
+        shard_axis_order = self.prefill_dim_order if mode == "prefill" else self.append_dim_order
+
+        kvcache_axis_names = tuple([shard_axis_name[i] for i in shard_axis_order])
+        kvcache_shape = tuple([kvcache_logical_shape[i] for i in shard_axis_order])   # reorder the tensor shape in kvcache ???
+        self.cached_key = self.variable(
+            "kvcache",
+            key_name,
+            nn.with_logical_partitioning(jnp.zeros, kvcache_axis_names),
+            kvcache_shape,
+            self.dtype,
+        )
+        self.cached_value = self.variable(
+            "kvcache",
+            value_name,
+            nn.with_logical_partitioning(jnp.zeros, kvcache_axis_names),
+            kvcache_shape,
+            self.dtype,
+        )
+
+
+    def llama_prefill(self,key: jax.Array, value: jax.Array, start_pos: int):
+
+        batch,seqlen = key.shape
+        assert(key.shape == value.shape, "key and value shape must match")
+        assert(key.dtype == value.dtype, "Key and value dtpes should match")
+
+        self.alloc_kvcache("prefill",batch,seqlen,heads,attn_dim)
+
+        _key = jnp.transpose(key,self.prefill_dim_order)
+        _value = jnp.transpose(value,self.prefill_dim_order)
+
+        self.cached_key.value[:batch, start_pos : start_pos + seqlen] = _key
+        self.cached_value.value[:batch, start_pos : start_pos + seqlen] = _value 
+
+    def llama_append(self,key: jax.Array, value: jax.Array, start_pos: int):
+        batch,seqlen = key.shape
+        assert(key.shape == value.shape, "key and value shape must match")
+        assert(key.dtype == value.dtype, "Key and value dtpes should match")
+
+        self.alloc_kvcache("append",batch,seqlen,heads,attn_dim)
+        _key = jnp.transpose(key,self.prefill_dim_order)
+        _value = jnp.transpose(value,self.prefill_dim_order)
+
+        ##write 
+        self.cached_key.value[:batch, start_pos : start_pos + seqlen] = _key
+        self.cached_value.value[:batch, start_pos : start_pos + seqlen] = _value 
+
+        #read
+
+        _key = self.cached_key.value[:batch : start_pos+seqlen]
+        _value = self.cached_value.value[:batch: start_pos+seqlen]
+
+        #FIXME where do we handle kv_heads< q_heads
+        ## in attention layer
+        return _key, _value
+
 
     def kvcache_prefill(self, key: jax.Array, value: jax.Array, decoder_segment_ids: jax.Array):
 
@@ -235,5 +317,133 @@ class kvcache(nn.Module):
             return self.kvcache_append(key,value,decoder_segment_ids)
         elif mode == "training":
             return (key,value, decoder_segment_ids),None
+        else:
+            raise ValueError(f"Invalue Model mode passed ... {mode}")
+
+class llama_kvcache(nn.Module):
+    max_sequence_len: int
+    prefill_axis_names: Tuple[str,...]
+    append_axis_names: Tuple[str,...]
+    prefill_dim_order: Tuple[int,...] 
+    append_dim_order:  Tuple[int,...]
+    dtype: jnp.dtype
+    num_heads : int
+    batch_size: int
+    attn_dim: int
+    mode: str = "prefill"
+
+    def setup(self):
+        super().setup()
+        if (self.mode != "Training"):
+            self.alloc_kvcache("prefill",self.batch_size,self.max_sequence_len,self.num_heads,self.attn_dim)
+            self.alloc_kvcache("append",self.batch_size,self.max_sequence_len,self.num_heads,self.attn_dim)
+
+    #@nn.compact
+    def alloc_kvcache(self,mode: str, batch: int , seqlen: int , heads: int, attn_dim: int):
+        """  basic cache block for inference 
+        Arguments:
+          mode : str  prefill or append op
+          batch,heads,seqlen,attn_dim :  shape of kv tensor
+          head = kv_heads 
+                                     seqlen = for prefill same as max predict length
+                                     seqlen = for append  output_token_len - prefill_predict_length
+          dtype: tensor elements  data type in kv cache
+
+        return variables with shard partitioning
+        """
+
+        seqlen = self.max_sequence_len
+        kvcache_logical_shape = (batch, seqlen, heads, attn_dim)
+
+
+        key_name = "kvcached_prefill_key" if mode == "prefill" else "kvcached_append_key"
+        value_name = "kvcached_prefill_value" if mode == "prefill" else "kvcached_append_value"
+        shard_axis_name = self.prefill_axis_names if mode == "prefill" else self.append_axis_names
+        shard_axis_order = self.prefill_dim_order if mode == "prefill" else self.append_dim_order
+
+        kvcache_axis_names = tuple([shard_axis_name[i] for i in shard_axis_order]) if shard_axis_name is not None else None
+        kvcache_shape = tuple([kvcache_logical_shape[i] for i in shard_axis_order])   # reorder the tensor shape in kvcache ???
+        #key = self.make_rng('kvcache')
+        self.cached_key = self.variable(
+            "kvcache",
+            key_name,
+            nn.with_logical_partitioning(jnp.zeros, kvcache_axis_names),
+            kvcache_shape,
+            self.dtype,
+        )
+        self.cached_value = self.variable(
+            "kvcache",
+            value_name,
+            nn.with_logical_partitioning(jnp.zeros, kvcache_axis_names),
+            kvcache_shape,
+            self.dtype,
+        )
+
+
+    def llama_prefill(self,key: jax.Array, value: jax.Array, start_pos: int):
+
+        batch,seqlen,heads,attn_dim = key.shape
+        #print(key.shape)
+        assert(key.shape == value.shape, "key and value shape must match")
+        assert(key.dtype == value.dtype, "Key and value dtpes should match")
+
+        #self.alloc_kvcache("prefill",batch,seqlen,heads,attn_dim)
+
+        _key = jnp.transpose(key,self.prefill_dim_order)
+        _value = jnp.transpose(value,self.prefill_dim_order)
+        #print(_key.shape)
+
+        #print(self.cached_key.value.shape)
+        #self.cached_key.value[:batch, start_pos : start_pos + seqlen] = _key
+        #self.cached_value.value[:batch, start_pos : start_pos + seqlen] = _value 
+        self.cached_key.value = self.cached_key.value.at[:batch, start_pos : start_pos + seqlen].set(_key)
+        self.cached_value.value = self.cached_key.value.at[:batch, start_pos : start_pos + seqlen].set(_value)
+
+        return key,value,start_pos
+
+    def llama_append(self,key: jax.Array, value: jax.Array, start_pos: int):
+        batch,seqlen,heads,attn_dim = key.shape
+        assert(key.shape == value.shape, "key and value shape must match")
+        assert(key.dtype == value.dtype, "Key and value dtpes should match")
+
+        #self.alloc_kvcache("append",batch,seqlen,heads,attn_dim)
+        _key = jnp.transpose(key,self.prefill_dim_order)
+        _value = jnp.transpose(value,self.prefill_dim_order)
+
+        ##write 
+        self.cached_key.value[:batch, start_pos : start_pos + seqlen] = _key
+        self.cached_value.value[:batch, start_pos : start_pos + seqlen] = _value 
+
+        #read
+
+        _key = self.cached_key.value[:batch : start_pos+seqlen]
+        _value = self.cached_value.value[:batch: start_pos+seqlen]
+
+        #FIXME where do we handle kv_heads< q_heads
+        ## in attention layer
+        return _key, _value
+
+    @nn.compact
+    def __call__(self, key: jax.Array, value: jax.Array, start_pos: int, mode: str) -> tuple:
+
+        """ KV cache appends and returns 
+            Arguments: 
+               key : shape [batch, seqlen, heads,attn_dim]   heads : kv_div
+               value : shape [batch, seqlen, heads,attn_dim]   heads : kv_div
+               mode : model mode
+
+            returns:
+                tuple of KV tensor
+        """
+        assert(key.shape == value.shape)
+
+
+        if mode == "prefill":
+            #prefill mode, fillup cache with zeros and return prefill"
+            return self.llama_prefill(key,value,start_pos)
+        elif mode == "append":
+            return self.llama_append(key,value,start_pos)
+        elif mode == "training":
+            return (key,value,start_pos)
         else:
             raise ValueError(f"Invalue Model mode passed ... {mode}")

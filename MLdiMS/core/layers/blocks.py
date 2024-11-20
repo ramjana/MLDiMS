@@ -38,7 +38,7 @@ from core.layers.kvcache import kvcache
 class MLPBlockInput(nn.Module):
     features: int
     data_type : jnp.dtype
-    use_norm : bool = True
+    use_norm : bool = False 
     use_bias : bool = False
     kernel_init: Callable = nn.initializers.lecun_normal()
 

@@ -272,6 +272,7 @@ class TPAsyncMLPBlock(nn.Module):
              kernel_init_scale_factor=self.kernel_init_scale_factor*(num_devices**-0.5),
              name="MLPInput",
          )(x)
+         x = nn.gelu(x)
          #output MLP layer
          x = TPAsyncDense(
              dense_fn = functools.partial(
@@ -295,6 +296,7 @@ class TPOutputLayer(nn.Module):
     num_outputs: int
     datatype: jnp.dtype
     shard_min_size: int
+    norm_en: bool = True
 
     def setup(self):
         super().setup()
@@ -308,18 +310,20 @@ class TPOutputLayer(nn.Module):
         x = split_array_over_mesh(x,axis_name=self.shard_axis_name,split_axis=1)
 
         #shard parameters over model axis
-        norm_fn = shard_module_weights(
-            nn.RMSNorm,
-            shard_axis_name=self.shard_axis_name,
-            min_weight_size=self.shard_min_size,
-        )
+        if (self.norm_en):
+            norm_fn = shard_module_weights(
+                nn.RMSNorm,
+                shard_axis_name=self.shard_axis_name,
+                min_weight_size=self.shard_min_size,
+            )
 
         dense_fn = shard_module_weights(
             nn.Dense,
             shard_axis_name=self.shard_axis_name,
             min_weight_size=self.shard_min_size,
         )
-        x = norm_fn(dtype=self.datatype, name="outRMSnorm")(x)
+        if (self.norm_en):
+            x = norm_fn(dtype=self.datatype, name="outRMSnorm")(x)
         x = dense_fn(
             features=self.num_outputs,
             dtype=self.datatype,
@@ -333,6 +337,7 @@ class TPInputEmbedding(nn.Module):
     data_type: jnp.dtype
     embedding_dim: int
     vocab_size: int
+    tp_strategy: Literal["gather","scatter","Auto"] = "Auto"
     encoding_type: Literal["learned","sinusoidal"] = "sinusoidal"
 
     def setup(self):
@@ -341,15 +346,36 @@ class TPInputEmbedding(nn.Module):
     @nn.compact
     def __call__(self,x: jax.Array) -> jax.Array:
 
-        return ModelParallelism(
+        num_devices = jax.lax.psum(1,self.shard_axis_name)
+        _strategy = self.tp_strategy if num_devices>1 else "Auto"
+        #return ModelParallelism(
+        embed_fn = functools.partial(
+             ModelParallelism,
+             shard_axis_name=self.shard_axis_name,
+             module_fn = functools.partial(
+                 InputEmbedding,
+                 seq_len=self.seq_len,
+                 shard_axis_name=self.shard_axis_name,
+                 data_type=self.data_type,
+                 vocab_size=self.vocab_size,
+                 embedding_dim=self.embedding_dim,
+                 encoding_type=self.encoding_type),
+             name="module",
+        )
+        if _strategy == "Auto":
+            ##vanilla dense op no sharding
+            x = InputEmbedding(
+                seq_len=self.seq_len,
                 shard_axis_name=self.shard_axis_name,
-                module_fn = functools.partial(
-                    InputEmbedding,
-                    seq_len=self.seq_len,
-                    shard_axis_name=self.shard_axis_name,
-                    data_type=self.data_type,
-                    vocab_size=self.vocab_size,
-                    embedding_dim=self.embedding_dim,
-                    encoding_type=self.encoding_type),
-                name="module",
-        )(x)
+                data_type=self.data_type,
+                vocab_size=self.vocab_size,
+                embedding_dim=self.embedding_dim,
+                encoding_type=self.encoding_type)(x)
+            return x
+        elif _strategy == "gather":
+           ## gather communicate input x to all devices before computation
+           x = embed_fn()(x)
+           x = jax.lax.all_gather(x,self.shard_axis_name,axis=-1,tiled=True)
+           return x
+        else:
+           raise ValueError("Invalid TP strategy = {self.tp_strategy}")

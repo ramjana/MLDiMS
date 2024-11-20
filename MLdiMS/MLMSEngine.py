@@ -65,7 +65,7 @@ class MLMSEngine():
 
         self.replicatedsharding = jax.sharding.NamedSharding(self.mesh,PS(None))
 
-        self.anbstract_params= None
+        self.abstract_params= None
         self.kvcache_shardings = None
         self.kvcache_annotations = None
         self.kvcache_annotations_named = None

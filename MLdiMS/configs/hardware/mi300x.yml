@@ -1,0 +1,125 @@
+gpu_name: "mi300x"
+architecture: "gfx9"
+
+#Sytem Level parameters
+num_gpus: 1
+
+#GPU parameters
+num_aids: 4
+num_xcc_aid: 2
+num_cu_xcc: 38
+
+
+#memory parameters
+num_l2channels_xcc: 16
+num_mallchannels_aids: 32
+l2capacity_channel: 256  #in KB
+mallcapacity_channel: 1024
+
+num_stacks_aid: 2
+num_bits_channel: 64
+num_hbm_channels: 128
+hbm_strobe_freq: 6.4
+
+hbm_efficiency: .35
+
+hbm_read_bw: 64
+hbm_write_bw: 64
+
+l2_read_bw: 128
+l2_write_bw: 64
+mall_read_bw: 64
+mall_write_bw: 64
+
+l2_efficiency: .95
+l2_hit: .7
+l2_hit_latency: 256  ##cycles
+mall_hit_latency: 83
+hbm_latency: 80
+lds_latency: 48
+l1_hit_latency: 144
+
+l2_df_bw: 64
+
+l1_capacity:  32
+lds_capacity: 64
+icache_capacity: 16
+dcache_capacity: 32
+lds_bandwidth: 128
+l1_read_bw: 64
+l2_write_bw: 64
+icache_read_bw: 128
+atomic_rate_channel: 16  #f32 rate 
+atomic_latency: 40
+
+#CU parameters
+wavefront: 64
+num_simds: 4
+num_xdl: 4
+threads_simd: 16
+vgprs_simd: 512
+sgprs_simd: 128
+vgpr_read_bw_simd: 256
+vgpr_write_bw_simd: 256
+num_sgpr_ports: 1
+num_vgpr_rdports: 4
+num_vgpr_wrports: 4
+direct_lds_write_bw: 64
+mul32_rate: 64
+fma32_rate: 128
+valu_coexec_rate: 256
+fma64_rate: 128
+num_waves_simd: 10
+ipc: 5 
+lds_issue_latency: 8
+vec_issue_latency: 16  #cycles
+value_issue_latency: 4
+sbarrier_latency_min: 40
+maxthreads_wg: 1024
+salu_issue_latency: 4
+l1_cu_bw: 64
+
+
+valu_xdl_coexec: True
+transcendental_xdl_coexec: True
+transcendental_rate: 16
+
+lds_threads_cycle: 32
+lds_banks: 32
+lds_bank_width: 4
+
+num_coalescing_threads_cycle: 8   #ta_addresses
+
+xdl_f16_rate: 2048
+xdl_bf16_rate: 2048
+xdl_f32_rate: 256
+xdl_f8_rate: 4096
+xdl_f4_rate: 4096
+xdl_f64_rate: 256
+
+f32_conv_rate: 64
+
+l1_cacheline_size: 64
+l2_cacheline_size: 128
+llc_cacheline_size: 64
+
+l1_efficiency: 1
+l2_efficiency: .95
+llc_efficiency: .8 
+
+flush_l2: 1
+flush_l2_latency: 2048 
+
+launch_latency: 1.8   #us
+kernarg_latency: 2.4   #us
+
+num_waveslots_simd: 8
+max_numwgs_cu: 16
+max_threads_wg: 1024
+
+num_gmi_links: 8
+gmi_link_bw: 48
+gmi_latency: 10 
+
+ifetch_miss_latency: 512
+dpm_mode: 0
