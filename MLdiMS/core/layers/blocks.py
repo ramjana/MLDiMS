@@ -285,14 +285,13 @@ class MultiHeadAttention(nn.Module):
      use_bias_qkv: bool
      attention: Callable
      data_type: jnp.dtype
-     mask : jax.Array | None = None
      normalize_qk: bool = False
 
      def setup(self):
          super().setup()
 
      @nn.compact
-     def __call__(self,x: jax.Array) -> jax.Array:
+     def __call__(self,x: jax.Array, mask: jax.Array) -> jax.Array:
          features = x.shape[-1]
          #Normalize lyaer
          x = RMSNorm(dtype=self.data_type,name="PreNorm")(x)
@@ -307,8 +306,8 @@ class MultiHeadAttention(nn.Module):
                  name="QKVProjection"
          )(x)
          x = dot_product_attention(
-             q,k,v,self.mask,
-             )(x)
+             q,k,v
+             )(x,mask)
          x = AttnOutput(
              features=features,
              data_type = self.data_type,
@@ -566,7 +565,7 @@ class TransformerBlock(nn.Module):
         super().setup()
 
     @nn.compact
-    def __call__(self, x: jax.Array) -> jax.Array:
+    def __call__(self, x: jax.Array, mask: jax.Array) -> jax.Array:
 
         #attention layer block
         attn_out  = MultiHeadAttention(
@@ -575,7 +574,7 @@ class TransformerBlock(nn.Module):
             use_bias_qkv = self.use_bias_qkv,
             mask = self.mask,
             data_type= self.data_type,
-            )(x)
+            )(x,mask)
         attn_out = Dropout(rate=self.dropout_rate, deterministic=not self.train)(attn_out)
         x = x + attn_out
         #MLP block
@@ -652,7 +651,7 @@ class OldPositionalEncoding(nn.Module):
     embedding_dim:int
     shard_axis_name: str
     dtype: jnp.dtype = jnp.float32
-    encoding_type: str = "learned"
+    encoding_type: str = "sinusoidal"
 
     @nn.compact
     def __call__(self, x: jax.Array) -> jax.Array:
@@ -690,7 +689,6 @@ class OldPositionalEncoding(nn.Module):
         return x
 
 class InputEmbedding(nn.Module):
-    seq_len: int
     shard_axis_name: str
     data_type: jnp.dtype
     vocab_size: int
@@ -710,8 +708,8 @@ class InputEmbedding(nn.Module):
             dtype=self.data_type,
             name="token_embedding",
         )(x)
-        x = OldPositionalEncoding(
+        x = PositionalEncoding(
             embedding_dim = self.embedding_dim,    
             shard_axis_name=self.shard_axis_name,
-            name="PositionalEncoding")(x)
+            name="PositionalEncoding")(x,None)
         return x

@@ -292,11 +292,13 @@ def train_step_tp(
         loss_fn=functools.partial(loss_fn,data_axis_name=data_axis_name,model_axis_name=model_axis_name)
     )
     # Update parameters. We need to sync the gradients across devices before updating.
+    print("train_step_tp:: syncing gradients..")
     with jax.named_scope("sync_gradients"):
         grads = sync_gradients(grads, (data_axis_name, model_axis_name))
     new_state = state.apply_gradients(grads=grads, rng=rng)
     # Sum metrics across replicas. Alternatively, we could keep the metrics separate
     # and only synchronize them before logging. For simplicity, we sum them here.
+    print("train_step_tp:: syncing metrics..")
     with jax.named_scope("sync_metrics"):
         step_metrics = jax.tree_map(
             lambda x: jax.lax.psum(x, axis_name=(data_axis_name, model_axis_name)),

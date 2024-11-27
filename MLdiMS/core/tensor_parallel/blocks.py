@@ -22,6 +22,7 @@ from .TPbaseops import (
         TPRMSNorm,
         TPAsyncDense,
         TPAsyncMLPBlock,
+        TPAsyncllamaMLPBlock,
         TPOutputLayer,
         TPInputEmbedding
      )
@@ -41,7 +42,6 @@ class TPMultiHeadAttention(nn.Module):
      #attention: Callable
      data_type: jnp.dtype
      shard_axis_name: str
-     mask : jax.Array | None = None
      normalize_qk: bool = False
      train: bool = False   #FIXME deprecate
 
@@ -49,17 +49,13 @@ class TPMultiHeadAttention(nn.Module):
          super().setup()
 
      @nn.compact
-     def __call__(self,x: jax.Array) -> jax.Array:
+     def __call__(self,x: jax.Array, mask: jax.Array) -> jax.Array:
          num_devices = jax.lax.psum(1,self.shard_axis_name)
          features = x.shape[-1]
          x = TPRMSNorm(data_type=self.data_type,shard_axis_name=self.shard_axis_name,name="PreNorm")(x)
          #QKV projection
          #densegeneral  builtin functions shards embedding dimension inot num_heads, head_dim
          #x = x.reshape(-1,self.num_heads,head_dim)
-         #print(f"block emedding_dim = {self.embedding_dim}")
-         #print(f"block head_dim = {self.head_dim}")
-         #print(f"block num_heads = {self.num_heads}")
-         #print(f"TPMultiHeadAttention x.shape = {x.shape}")
          q,k,v = TPAsyncDense(
              dense_fn = functools.partial(
                  QKVProjection, 
@@ -74,7 +70,7 @@ class TPMultiHeadAttention(nn.Module):
             kernel_init_scale_factor = num_devices**-0.5,
             name="QKVProjection",
          )(x)
-         x = dot_product_attention()(q,k,v,self.mask,attn_bias=False)
+         x = dot_product_attention()(q,k,v,mask,attn_bias=False)
          x = TPAsyncDense(
              dense_fn = functools.partial(
                  AttnOutput,
@@ -91,7 +87,6 @@ class TPMultiHeadAttention(nn.Module):
 class TPTransformerBlock(nn.Module):
     llmConfig: ConfigDict
     train: bool
-    mask: jax.Array | None = None
 
     def setup(self):
         self.data_type =  self.llmConfig.dtype
@@ -99,7 +94,6 @@ class TPTransformerBlock(nn.Module):
         self.embedding_dim =  self.llmConfig.model_dim
         self.num_heads = self.llmConfig.num_heads
         self.head_dim = self.llmConfig.head_dim
-        self.causal_mask = self.llmConfig.causal_mask
         self.normalize_qk = self.llmConfig.normalize_qk
         self.use_bias_qkv = self.llmConfig.bias_qkv
         self.use_mlpout_bias = self.llmConfig.bias_mlpout
@@ -115,11 +109,9 @@ class TPTransformerBlock(nn.Module):
         super().setup()
 
     @nn.compact
-    def __call__(self,x: jax.Array) -> jax.Array:
+    def __call__(self,x: jax.Array, mask: jax.Array) -> jax.Array:
 
         #blayer 
-        #print(f"TPtransformer head_dim= {self.head_dim}")
-        #print(f"TPtransformer num_heads= {self.num_heads}")
         if self.llmConfig.get("fsdp",None) is not None and "MultiHeadAttn" in self.llmConfig.fsdp.modules:
             shard_parameter = True
         else: 
@@ -141,12 +133,11 @@ class TPTransformerBlock(nn.Module):
                        head_dim=self.head_dim,
                        use_bias_qkv=self.use_bias_qkv,
                        data_type=self.data_type,
-                       mask=self.mask,
                        normalize_qk=self.normalize_qk,
                        train=self.train,
                        shard_axis_name=self.shard_axis_name,
                        name="Attention"
-        )(x)
+        )(x,mask)
 
         attn_out = nn.Dropout(
                        rate=self.dropout_rate,
@@ -160,7 +151,7 @@ class TPTransformerBlock(nn.Module):
         else: 
             shard_parameter = False
         mlp_layer = prep_module(
-                    layer=TPAsyncMLPBlock,
+                    layer=TPAsyncllamaMLPBlock,
                     layer_name="MLP",
                     axis_name=self.fsdp_axis_name,
                     checkpoint_en=self.checkpoint_en,
@@ -213,7 +204,6 @@ class QKVMLPDenseParallel(nn.Module):
             use_norm=False,
             name="MLPInput",
         )(x)
-        #print(f"parallelblock embedding_dim = {self.embedding_dim}")
         q,k,v = QKVProjection(
            head_dim = self.head_dim,
            num_heads = self.num_heads,
@@ -250,7 +240,6 @@ class AttnMLPOutParallel(nn.Module):
 class TPTransformerParallelBlock(nn.Module):
     llmConfig: ConfigDict
     train: bool
-    mask: jax.Array | None = None
 
     def setup(self):
         self.data_type =  llmConfig.dataType
@@ -258,7 +247,6 @@ class TPTransformerParallelBlock(nn.Module):
         self.embedding_dim =  llmConfig.model_dim
         self.num_heads = llmConfig.num_heads
         self.head_dim = llmConfig.head_dim
-        self.causal_mask = llmConfig.mask
         self.normalize_qk = llmConfig.normalize_qk
         self.use_bias_qkv = llmConfig.bias_qkv
         self.use_bias_attn = llmConfig.bias_attn
@@ -270,7 +258,7 @@ class TPTransformerParallelBlock(nn.Module):
         super().setup()
 
     @nn.compact
-    def __call__(self,x: jax.Array) -> jax.Array:
+    def __call__(self,x: jax.Array, mask: jax.Array) -> jax.Array:
 
         num_devices = jax.lax.psum(1,self.shard_axis_name)
         residual    = x
@@ -295,7 +283,7 @@ class TPTransformerParallelBlock(nn.Module):
            dense_name="QKVMLPParallel",
         )(x)
             
-        v = dot_product_attention(q,k,v,self.causal_mask)
+        v = dot_product_attention(q,k,v,mask)
 
         # MLP and attention layer with async scatter.
         block_out = TPAsyncDense(
@@ -320,21 +308,18 @@ class TPTransformerParallelBlock(nn.Module):
 class TransformerBackbone(nn.Module):
     llmConfig: ConfigDict
     train: bool
-    mask: jax.Array | None = None
     block_fn: Any = TPTransformerBlock
 
     @nn.compact
-    def __call__(self, x: jax.Array) -> jax.Array:
+    def __call__(self, x: jax.Array, mask: jax.Array) -> jax.Array:
         if self.llmConfig.model.get("fsdp",None) is not None and "Block" in self.llmConfig.model.fsdp.modules:
             shard_parameter = True
         else:
             shard_parameter = False
-        if self.llmConfig.train.remat is not None:
+        if self.llmConfig.train.remat is not None and "Block" in self.llmConfig.train.remat:
             checkpoint_en = True
         else:
             checkpoint_en = False
-        #shard_parameter = False
-        #checkpoint_en = False
         block_fn = prep_module(
             layer=self.block_fn,
             layer_name="Block",
@@ -343,12 +328,11 @@ class TransformerBackbone(nn.Module):
             shard_size=self.llmConfig.model.fsdp.min_weight_size,
             shard_parameter=shard_parameter,
             fsdp_modules=self.llmConfig.model.fsdp.modules,
-            #remat_modules=self.llmConfig.train.remat,
         )
-        block = block_fn(llmConfig=self.llmConfig.model, train=self.train, mask=self.mask, name="block")
+        block = block_fn(llmConfig=self.llmConfig.model, train=self.train,name="block")
         # Scan version
         x, _ = nn.scan(
-            lambda module, carry, _: (module(carry), None),
+            lambda module, carry, _: (module(carry,mask), None),
             variable_axes={"params": 0},
             split_rngs={"params": True, "dropout": True},
             length=self.llmConfig.model.num_layers,
@@ -369,24 +353,23 @@ class Transformer(nn.Module):
         if mask is None and self.llmConfig.model.causal_mask:
             mask = nn.make_causal_mask(x, dtype=bool)
         x = TPInputEmbedding(
-            seq_len = self.llmConfig.data.seq_len,   #FIXME this needs to be fixed to avoid aConcretizationTypeError
             shard_axis_name=self.llmConfig.model_axis_name,
             embedding_dim=self.llmConfig.model.model_dim,
             data_type=self.llmConfig.model.dtype,
             vocab_size=self.llmConfig.model.vocab_size,
+            tp_strategy="gather",
             name="input_embedding",
         )(x)
         x = TransformerBackbone(
             llmConfig=self.llmConfig,
             train=self.train,
-            mask=mask,
             block_fn=self.block_fn,
             name="backbone",
-        )(x)
+        )(x,mask)
         x = TPOutputLayer(
             shard_axis_name=self.llmConfig.model_axis_name,
             num_outputs=self.llmConfig.model.num_outputs,
-            datatype = self.llmConfig.model.dtype,
+            dtype = self.llmConfig.model.dtype,
             shard_min_size=self.llmConfig.model.fsdp.min_weight_size,
             name="output_layer",
         )(x)

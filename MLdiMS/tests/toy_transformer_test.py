@@ -18,6 +18,8 @@ PyTree = Any
 Parameter = jax.Array | nn.Partitioned
 Metrics = Dict[str, Tuple[jax.Array, ...]]
 
+import argparse
+
 
 from core.tensor_parallel.blocks import(
      TPTransformerBlock,
@@ -42,12 +44,12 @@ def make_modelConfig(fsdp:ConfigDict,vocab_size:int) -> ConfigDict:
     """
     model_config = ConfigDict(
         dict(
-            model_dim=256,
-            hidden_dim=1024,
+            model_dim=4096,
+            hidden_dim=16384,
             dropout_rate=0.1,
             mlp_factor=4,
-            num_layers=6,
-            head_dim=32,
+            num_layers=32,
+            head_dim=64,
             normalize_qk=True,
             bias_qkv=True,
             bias_attn=True,
@@ -70,9 +72,9 @@ def make_modelConfig(fsdp:ConfigDict,vocab_size:int) -> ConfigDict:
 def make_dataConfig() -> ConfigDict:
     data_config = ConfigDict(
         dict(
-            batch_size=8,
-            vocab_size=100,
-            seq_len=32,
+            batch_size=16,
+            vocab_size=32000,
+            seq_len=512,
         )
     )
     return data_config
@@ -80,7 +82,8 @@ def make_dataConfig() -> ConfigDict:
 def make_fsdp() -> ConfigDict:
     fsdp = ConfigDict(
         dict(
-            modules=("Transformer",),
+            #modules=("Transformer",),
+            modules=(),
             axis_name="data",
             min_weight_size=2**8,
         )
@@ -157,12 +160,45 @@ def loss_fn_transformer(
     return loss, step_metrics
 
 
-def main():
+def main(userArgs):
+
+    #initialize parser
+
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("-tr", "--train", action="store_true", help = "train the model for 'n' steps")
+    parser.add_argument("-tn", "--train_steps", type=int, default=3, help = "train the model for 'n' steps")
+    parser.add_argument("-inf", "--generate", action="store_true", help = "inference task")
+    parser.add_argument("-gn", "--generate_steps", help = "inference task for 'gn' tokens")
+    parser.add_argument("-l", "--single_layer", action="store_true", help="simulate single layer") 
+    parser.add_argument("-s", "--max_seq_len", default=512, type=int, help="maximum sequence length") 
+    parser.add_argument("-plen", "--prompt_len", default=512, type=int, help="maximum sequence length") 
+    parser.add_argument("-glen", "--gen_len", default=32, type=int, help="maximum sequence length") 
+    parser.add_argument("-b", "--max_batch_size", default=16, type=int, help="global batch size") 
+    parser.add_argument("-nd", "--num_devices", default=8, type=int, help="number of devices") 
+    parser.add_argument("-tp", "--tensor_parallelism", default=4, type=int, help="number of devices for tensor parallelism") 
+
+    args = parser.parse_args()
+
+    if args.train:
+        train_model(args.train_steps,args.single_layer,args.max_seq_len,args.max_batch_size,args.num_devices,args.tensor_parallelism)
+
+    if args.generate:
+        generate_model(args.generate_steps,args.single_layer,args.max_seq_len,args.prompt_len,args.gen_len,args.max_batch_size,args.num_devices,args.tensor_parallelism)
+
+
+def train_model(num_steps:int ,single_layer:bool, seq_len: int, bs:int, num_devices:int, tp:int):
 
     ## generate configs for run
     fsdp_config = make_fsdp()
     data_config = make_dataConfig()
     model_config = make_modelConfig(fsdp_config,data_config.vocab_size)
+
+    if single_layer:
+       model_config.num_layers = 1
+
+    data_config.seq_len = seq_len
+    data_config.batch_size = bs
 
     optimizer_config = ConfigDict(
         dict(
@@ -185,7 +221,11 @@ def main():
             seed=42,
         )
     )
-    simulate_CPU_devices(8)
+    if tp is not None:
+        config.model_axis_size = tp
+        model_config.model_axis_size = tp
+
+    simulate_CPU_devices(num_devices)
     print("Build nD mesh for distributed training ")
     #define 2D mesh of (dataParallelism,TensorParallelism)
     array_devices = np.array(jax.devices()).reshape(-1,config.model_axis_size)
@@ -266,14 +306,24 @@ def main():
         ),
     )
     state_transformer = init_transformer_fn(model_init_rng, batch_transformer.inputs)
-
+    #pprint(state_transformer_specs.params)
+    #print("TP Parameters - Attention layer")
+    #pprint(
+    #    jax.tree_map(lambda x: x.shape, state_transformer.params["backbone"]["block"]["Attention"]["AttnOutput"]["shard_0"]["sharded"])
+    #)
+    #print()
+    #pprint(
+    #    jax.tree_map(lambda x: x.shape, state_transformer.params["backbone"]["block"]["Attention"]["AttnOutput"]["shard_1"]["sharded"])
+    #)
+    #sys.exit()
+#
     #print("Transformer Block - Output Layer, Shard 0")
     if config.model.parallel_block:
         shard_0_params = state_transformer.params["backbone"]["block"]["out"]["shard_0"]["sharded"]
     else:
         shard_0_params = {
             "attn": state_transformer.params["backbone"]["block"]["Attention"]["AttnOutput"]["shard_0"]["sharded"],
-            "mlp": state_transformer.params["backbone"]["block"]["mlp"]["MLPInput"]["shard_0"]["sharded"],
+            "mlp": state_transformer.params["backbone"]["block"]["mlp"]["MLPInput1"]["shard_0"]["sharded"],
         }
     #pprint(
     #    jax.tree.map(
@@ -294,7 +344,7 @@ def main():
            out_specs=(state_transformer_specs, P()),
            check_rep=False,
        ),
-       #donate_argnames=("state", "metrics"),
+       donate_argnames=("state", "metrics"),
     )
 
     state_shapes, metric_shapes = jax.eval_shape(
@@ -308,11 +358,12 @@ def main():
         state_transformer, metrics_transformer, batch_transformer
     )
 
-    for _ in tqdm(range(50)):
+    sys.exit()
+
+    for _ in tqdm(range(num_steps)):
         state_transformer, metrics_transformer = train_step_transformer_fn(
             state_transformer, metrics_transformer, batch_transformer
         )
-
     final_metrics_transformer = jax.tree.map(
         lambda x: jnp.zeros(x.shape, dtype=x.dtype), metric_shapes
     )
@@ -322,6 +373,207 @@ def main():
     )
     print_metrics(final_metrics_transformer, title="Final Metrics - Transformer")
 
+def generate_model(num_steps:int ,single_layer:bool, seq_len:int ,prompt_len:int, gen_len:int, bs:int, num_devices:int, tp:int):
+
+    ## generate configs for run
+    fsdp_config = make_fsdp()
+    data_config = make_dataConfig()
+    model_config = make_modelConfig(fsdp_config,data_config.vocab_size)
+
+    if single_layer:
+        model_config.num_layers = 1
+
+    data_config.seq_len = prompt_len
+    data_config.batch_size = bs
+
+    optimizer_config = ConfigDict(
+        dict(
+            learning_rate=1e-3,
+            num_minibatches=1,
+        )
+    )
+    if num_steps is not None:
+        gen_len = min(num_steps,gen_len)
+    assert(prompt_len+gen_len <= seq_len)
+    training_config = make_trainConfig()
+    model_config.num_heads = model_config.model_dim // model_config.head_dim
+
+    config = ConfigDict(
+        dict(
+            model=model_config,
+            optimizer=optimizer_config,
+            data=data_config,
+            train=training_config,
+            data_axis_name=model_config.data_axis_name,
+            model_axis_name=model_config.model_axis_name,
+            model_axis_size=model_config.model_axis_size,
+            seed=42,
+        )
+    )
+    if tp is not None:
+        config.model_axis_size = tp
+        model_config.model_axis_size = tp
+
+    simulate_CPU_devices(num_devices)
+    print("Build nD mesh for distributed inferencing ")
+    #define 2D mesh of (dataParallelism,TensorParallelism)
+    array_devices = np.array(jax.devices()).reshape(-1,config.model_axis_size)
+    mesh = Mesh(array_devices,(config.data_axis_name,config.model_axis_name))
+
+    ##create model
+    model_transformer = get_transformer_module(config=config)
+
+    start_pos = 0
+    mask = jnp.full(
+            (prompt_len,prompt_len), jnp.float16("-inf"))
+
+    mask = jnp.triu(mask)
+    mask = jnp.hstack([
+                jnp.zeros((prompt_len,start_pos)),
+                mask]).astype(config.train.data_type)
+
+    def prefill_step(state,batch,mask):
+        rng, step_rng = jax.random.split(state.rng)
+        logits = model_transformer.apply({'params' : state.params}, batch.inputs, mask=mask,train=False,rngs={"dropout": step_rng})
+        labels = split_array_over_mesh(batch.labels, axis_name=config.model_axis_name, split_axis=1)
+        assert (
+            logits.shape[:-1] == labels.shape
+        ), f"Logits and labels shapes do not match: {logits.shape} vs {labels.shape}"
+
+        token_logprobs = optax.softmax_cross_entropy_with_integer_labels(logits, labels)
+        return token_logprobs
+
+    def generate_step(state,batch,mask):
+        rng, step_rng = jax.random.split(state.rng)
+        logits = model_transformer.apply({'params' : state.params}, batch.inputs, mask=mask,train=False,rngs={"dropout": step_rng})
+        next_token = jnp.argmax(logits[:, -1], axis=-1)
+        return next_token
+
+    def init_transformer(rng: jax.random.PRNGKey, x: jax.Array) -> TrainState:
+        init_rng, rng = jax.random.split(rng)
+        variables = model_transformer.init({"params" : init_rng}, x, mask=mask, train=False)
+        #variables = model_transformer.init({"params": init_rng}, x, train=False)
+        params = variables.pop("params")
+        state = TrainState.create(
+            apply_fn=model_transformer.apply,
+            params=params,
+            tx=optimizer_transformer,
+            rng=rng,
+        )
+        return state
+
+    ##create optimizer below
+    optimizer_transformer = optax.adam(
+        learning_rate = optax.warmup_exponential_decay_schedule(
+            init_value=0,
+            peak_value=config.optimizer.learning_rate,
+            warmup_steps=10,
+            transition_steps=1,
+            decay_rate=0.99,
+        )
+    )
+    rng = jax.random.PRNGKey(config.seed)
+    model_init_rng, data_inputs_rng = jax.random.split(rng)
+
+    print("Initialize tokens for inference")
+
+    tokens = jax.random.randint(
+        data_inputs_rng,
+        (config.data.batch_size, prompt_len+gen_len),
+        1,
+        config.data.vocab_size,
+    )
+    batch_transformer = Batch(
+        inputs=jnp.pad(tokens[:, :prompt_len-1], ((0, 0), (1, 0)), constant_values=0),
+        labels=tokens[:, :prompt_len]
+    )
+
+    init_transformer_fn = jax.jit(
+        shard_map(
+            init_transformer,
+            mesh,
+            in_specs=(P(), P(config.data_axis_name)),
+            out_specs=P(),
+            check_rep=False,
+        ),
+    )
+    state_transformer_shapes = jax.eval_shape(
+            init_transformer_fn, model_init_rng, batch_transformer.inputs[:, :prompt_len]
+    )
+    state_transformer_specs = nn.get_partition_spec(state_transformer_shapes)
+
+
+    init_transformer_fn = jax.jit(
+        shard_map(
+            init_transformer,
+            mesh,
+            in_specs=(P(), P(config.data_axis_name)),
+            out_specs=state_transformer_specs,
+            check_rep=False,
+        ),
+    )
+    state_transformer = init_transformer_fn(model_init_rng, batch_transformer.inputs[:, :prompt_len])
+
+    #pprint(state_transformer_specs.params)
+    #print("TP Parameters - Attention layer")
+    #pprint(
+    #    jax.tree_map(lambda x: x.shape, state_transformer.params["backbone"]["block"]["Attention"]["AttnOutput"]["shard_0"]["sharded"])
+    #)
+    #print()
+    #pprint(
+    #    jax.tree_map(lambda x: x.shape, state_transformer.params["backbone"]["block"]["Attention"]["AttnOutput"]["shard_1"]["sharded"])
+    #)
+    #print()
+    #pprint(
+    #    jax.tree_map(lambda x: x.shape, state_transformer.params["backbone"]["block"]["Attention"]["QKVProjection"]["shard_0"]["sharded"])
+    #)
+
+    prefill_step_transformer_fn = jax.jit(
+       shard_map(
+           functools.partial(prefill_step),
+           mesh,
+           in_specs=(state_transformer_specs, P(config.data_axis_name),P()),
+           out_specs=(P()),
+           check_rep=False,
+       ),
+       #donate_argnames=("state", "metrics"),
+    )
+
+    #prefill case
+    print(f"running prefill stage for prompt-len = {prompt_len}")
+    prev_pos  = 0
+    for _ in tqdm(range(1)):
+        #batch_transformer.inputs = batch_transformer.inputs[:, :prompt_len]
+        token_logprobs = prefill_step_transformer_fn(
+            state_transformer,batch_transformer,mask
+        )
+
+    #exit without token generation step
+    sys.exit()
+
+    generate_step_transformer_fn = jax.jit(
+       shard_map(
+           functools.partial(generate_step),
+           mesh,
+           in_specs=(state_transformer_specs,P(config.data_axis_name),P()),
+           out_specs=(P()),
+           check_rep=False,
+       ),
+       #donate_argnames=("state", "metrics"),
+    )
+    prev_pos = prompt_len-1
+    for cur_pos in range(prompt_len,prompt_len+gen_len):
+        batch_transformer = Batch(
+             inputs=tokens[:, prev_pos:cur_pos],
+             labels=tokens[:, cur_pos:cur_pos]
+        )
+        mask = None
+        #target = batch_transformer.labels[:, prev_pos+1:cur_pos+1]
+        next_token = generate_step_transformer_fn(
+                state_transformer,batch_transformer,mask
+        )
+        batch_transformer.inputs = batch_transformer.inputs[:,cur_pos] = next_token
+        prev_pos = cur_pos
 
 if __name__ == "__main__":
-    main()
+    main(sys.argv)

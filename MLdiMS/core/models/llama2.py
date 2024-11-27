@@ -298,7 +298,7 @@ class llama2(nn.Module):
         out = TPOutputLayer(
             shard_axis_name=self.config.model_axis_name,
             num_outputs=self.config.vocab_size,
-            datatype = self.config.dtype,
+            dtype = self.config.dtype,
             shard_min_size=self.config.fsdp_min_weight_size,
             norm_en=False,
             name="output_layer",

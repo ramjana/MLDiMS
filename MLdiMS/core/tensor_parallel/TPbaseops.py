@@ -21,7 +21,7 @@ from core.utilities.modelParallelism_functions import (
         async_scatter,
         async_scatter_bidir
     )
-from ..layers.baseops import Dense,RMSNorm
+from ..layers.baseops import Dense,RMSNorm,fmul,fadd
 from ..layers.blocks import MLPBlockInput,MLPBlockOutput,InputEmbedding
 
 PyTree = Any
@@ -235,6 +235,81 @@ class TPAsyncDense(nn.Module):
 # scatter primitive embedded in MLPouput to collect outputs of compute for reduction
 ####################################################################################
 
+class TPAsyncllamaMLPBlock(nn.Module):
+     shard_axis_name: str
+     embedding_dim: int
+     hidden_dim: int
+     data_type: jnp.dtype
+     use_norm: bool = False
+     use_bias: bool = True
+     tp_strategy: Literal['gather','scatter','auto'] = 'auto'
+     kernel_init_scale_factor: float = 1.0
+     communication_bidir: bool = True,
+     name: str ="MLPBlock"
+     multiple: int = 512
+
+     def setup(setup):
+         super().setup()
+
+
+     @nn.compact
+     def __call__(self,x: jax.Array) -> jax.Array:
+         num_devices = jax.lax.psum(1,self.shard_axis_name)
+         feature_dim = x.shape[-1]
+
+         hidden_dim = int(2 * self.hidden_dim / 3)
+         hidden_dim = self.multiple * ((hidden_dim + self.multiple -1) // self.multiple)
+
+         #print(f"axis_name = {self.shard_axis_name}")
+         #Normalize across devices before  MLP 
+         if self.use_norm:
+             x = TPRMSNorm(shard_axis_name=self.shard_axis_name, data_type = self.data_type, name="PreNorm")(x)
+
+         x1 = TPAsyncDense(
+             dense_fn = functools.partial(
+                  MLPBlockInput,
+                  features=self.hidden_dim//num_devices,
+                  use_norm=False,
+                  data_type=self.data_type
+             ),
+             tp_strategy = "gather",
+             shard_axis_name=self.shard_axis_name,
+             kernel_init_scale_factor=self.kernel_init_scale_factor*(num_devices**-0.5),
+             name="MLPInput1",
+         )(x)
+
+         x2 = TPAsyncDense(
+             dense_fn = functools.partial(
+                  MLPBlockInput,
+                  features=self.hidden_dim//num_devices,
+                  use_norm=False,
+                  data_type=self.data_type
+             ),
+             tp_strategy = "gather",
+             shard_axis_name=self.shard_axis_name,
+             kernel_init_scale_factor=self.kernel_init_scale_factor*(num_devices**-0.5),
+             name="MLPInput2",
+         )(x)
+
+         x = fmul(x1, x2)
+         x = nn.silu(x)
+
+         #output MLP layer
+         x = TPAsyncDense(
+             dense_fn = functools.partial(
+                  MLPBlockOutput,
+                  features=feature_dim,
+                  use_bias=self.use_bias,
+                  data_type=self.data_type
+             ),
+             tp_strategy = "scatter",
+             shard_axis_name=self.shard_axis_name,
+             kernel_init_scale_factor=self.kernel_init_scale_factor*(num_devices**-0.5),
+             name="MLPOutput",
+         )(x)
+         return x
+
+
 class TPAsyncMLPBlock(nn.Module):
      shard_axis_name: str
      embedding_dim: int
@@ -294,9 +369,10 @@ class TPAsyncMLPBlock(nn.Module):
 class TPOutputLayer(nn.Module):
     shard_axis_name: str
     num_outputs: int
-    datatype: jnp.dtype
+    dtype: jnp.dtype
     shard_min_size: int
     norm_en: bool = True
+    epsilon : float = 1.0e-5
 
     def setup(self):
         super().setup()
@@ -323,16 +399,15 @@ class TPOutputLayer(nn.Module):
             min_weight_size=self.shard_min_size,
         )
         if (self.norm_en):
-            x = norm_fn(dtype=self.datatype, name="outRMSnorm")(x)
+            x = norm_fn(dtype=self.dtype, name="outRMSnorm")(x)
         x = dense_fn(
             features=self.num_outputs,
-            dtype=self.datatype,
+            dtype=self.dtype,
             name="output_layer",
         )(x)
         return x
 
 class TPInputEmbedding(nn.Module):
-    seq_len:int
     shard_axis_name: str
     data_type: jnp.dtype
     embedding_dim: int
@@ -354,7 +429,6 @@ class TPInputEmbedding(nn.Module):
              shard_axis_name=self.shard_axis_name,
              module_fn = functools.partial(
                  InputEmbedding,
-                 seq_len=self.seq_len,
                  shard_axis_name=self.shard_axis_name,
                  data_type=self.data_type,
                  vocab_size=self.vocab_size,
@@ -365,7 +439,6 @@ class TPInputEmbedding(nn.Module):
         if _strategy == "Auto":
             ##vanilla dense op no sharding
             x = InputEmbedding(
-                seq_len=self.seq_len,
                 shard_axis_name=self.shard_axis_name,
                 data_type=self.data_type,
                 vocab_size=self.vocab_size,
