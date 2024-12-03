@@ -21,7 +21,7 @@ from core.utilities.modelParallelism_functions import (
         async_scatter,
         async_scatter_bidir
     )
-from ..layers.baseops import Dense,RMSNorm,fmul,fadd
+from ..layers.baseops import Dense,RMSNorm,fmul,fadd,silu,gelu
 from ..layers.blocks import MLPBlockInput,MLPBlockOutput,InputEmbedding
 
 PyTree = Any
@@ -173,10 +173,10 @@ class TPAsyncDense(nn.Module):
     tp_strategy: Literal['gather','scatter','Auto'] = 'Auto'
     kernel_init_fn : Callable = nn.initializers.lecun_normal()
     kernel_init_scale_factor: float = 1.0
-    #name: str = 'AsyncDenseOp'
     use_bidirectional: bool = True
     
     def setup(self):
+        layerName = self.name
         super().setup()
 
 
@@ -185,7 +185,6 @@ class TPAsyncDense(nn.Module):
 
         num_devices = jax.lax.psum(1,self.shard_axis_name)
         _strategy = self.tp_strategy if num_devices > 1  else 'Auto'
-        #print(f" TPAsyncDense= {x.shape}")
         dense_op = functools.partial(
              ModelParallelism,
              shard_axis_name= self.shard_axis_name,
@@ -193,7 +192,6 @@ class TPAsyncDense(nn.Module):
                  self.dense_fn,
                  kernel_init=scale_fn(self.kernel_init_fn,self.kernel_init_scale_factor),
              ),
-             name= self.name
         )
 
         if _strategy == "Auto":
@@ -207,7 +205,6 @@ class TPAsyncDense(nn.Module):
             outputs = [ 
                  dense_op(
                      module_kwargs={'use_bias' : (idx == 0)},
-                     name=f'shard_{idx}',
                  )(inp)
                  for idx,inp in enumerate(inputs)
             ]
@@ -219,7 +216,7 @@ class TPAsyncDense(nn.Module):
             outputs = [
                     dense_op(
                         module_kwargs={'use_bias': (idx==0)},
-                        name=f"shard_{idx}",
+                        #name=f"shard_{idx}",
                     )(x)
                     for idx in range(num_devices)
             ]
@@ -291,8 +288,8 @@ class TPAsyncllamaMLPBlock(nn.Module):
              name="MLPInput2",
          )(x)
 
-         x = fmul(x1, x2)
-         x = nn.silu(x)
+         x = fmul()(x1, x2)
+         x = silu()(x)
 
          #output MLP layer
          x = TPAsyncDense(
@@ -347,7 +344,7 @@ class TPAsyncMLPBlock(nn.Module):
              kernel_init_scale_factor=self.kernel_init_scale_factor*(num_devices**-0.5),
              name="MLPInput",
          )(x)
-         x = nn.gelu(x)
+         x = gelu()(x)
          #output MLP layer
          x = TPAsyncDense(
              dense_fn = functools.partial(
@@ -383,7 +380,10 @@ class TPOutputLayer(nn.Module):
         #apply shard over sequence length
 
         x = jax.lax.all_gather(x,axis_name=self.shard_axis_name,axis=-1, tiled=True)
-        x = split_array_over_mesh(x,axis_name=self.shard_axis_name,split_axis=1)
+        seq_len = x.shape[1]
+        shard_size = jax.lax.psum(1,self.shard_axis_name)
+        if seq_len >= shard_size:
+            x = split_array_over_mesh(x,axis_name=self.shard_axis_name,split_axis=1)
 
         #shard parameters over model axis
         if (self.norm_en):
@@ -433,8 +433,9 @@ class TPInputEmbedding(nn.Module):
                  data_type=self.data_type,
                  vocab_size=self.vocab_size,
                  embedding_dim=self.embedding_dim,
-                 encoding_type=self.encoding_type),
+                 name=self.name),
              name="module",
+                 #encoding_type=self.encoding_type),
         )
         if _strategy == "Auto":
             ##vanilla dense op no sharding
@@ -443,7 +444,8 @@ class TPInputEmbedding(nn.Module):
                 data_type=self.data_type,
                 vocab_size=self.vocab_size,
                 embedding_dim=self.embedding_dim,
-                encoding_type=self.encoding_type)(x)
+                #encoding_type=self.encoding_type,
+                name=self.name)(x)
             return x
         elif _strategy == "gather":
            ## gather communicate input x to all devices before computation

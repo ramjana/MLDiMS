@@ -1,4 +1,6 @@
 #model config for base transformer (llama2-7b)
+#    if config.single_layer_sim:
+#    config.num_layers = 1
 mode_name: "llama2-7b"
 model_dim: 4096
 num_heads: 32
@@ -114,9 +116,15 @@ fsdp_min_weight_size: 512
 seed: 1234
 max_batch_size: 32
 
+skip_metrics: True
+
+single_layer_sim: False
+
 #inference
 inference_prefill_lengths: "256,512,1024,2048"
 inference_stages: "prefill,append"
 inference_loop_iters: 10
 compute_dim_order: "0,1,2,3"
 prompt: "i love to"
+prompt_len: 256
+gen_len: 32

@@ -13,6 +13,8 @@ import jax.numpy as jnp
 #from jax import core
 from flax.linen import partitioning as nn_partitioning
 
+from core.utilities.utils import print_shapes
+
 import dataclasses
 
 Pytree = Any
@@ -79,6 +81,7 @@ class Dense(ShardMixIn,nn.Dense):
         super().setup()
 
     #@perf("Dense",attrgetter('features'),attrgetter('dtype'))
+    @print_shapes("Dense",attrgetter('name'))
     @nn.compact
     def __call__(self,x: jax.Array) -> jax.Array:
         # update cycles 
@@ -119,6 +122,7 @@ class RMSNorm(ShardMixIn,nn.RMSNorm):
         super().setup()
 
     #@perf("RMSNorm",attrgetter('name'),attrgetter('dtype'))
+    @print_shapes("RMSNorm",attrgetter('name'))
     @nn.compact
     def __call__(self,x: jax.Array) -> jax.Array:
         return (super().__call__(x))
@@ -204,6 +208,7 @@ class DenseGeneral(ShardMixIn,nn.DenseGeneral):
         super().setup()
 
     #@perf("DenseGeneral",attrgetter('features'))
+    @print_shapes("DenseGeneral",attrgetter('name'))
     def __call__(self,x: jax.Array) -> jax.Array:
         # update cycles 
         return (super().__call__(x))
@@ -300,11 +305,11 @@ class silu(nn.Module):
         silu(x) = x*sigmoid(x)
 
      """
-
      def setup(self):
          super().setup()
 
      #@perf("silu",attrgetter('name'),attrgetter('dtype'))
+     @print_shapes("silu",attrgetter('name'))
      @nn.compact
      def __call__(self,x : jax.Array) -> jax.Array:
          return nn.silu(x)
@@ -411,10 +416,19 @@ def normalize_attention(local_outs, local_maxes, local_sums):
         attn_out += local_normalizer * local_out
     return attn_out
 
-def fadd(x,y):
-    out = x + y
-    return out
 
-def fmul(x,y):
-    out = x * y
-    return out
+class fadd(nn.Module):
+    def setup(self):
+        super().setup()
+    @nn.compact
+    def __call__(self,x, y):
+        out = x + y
+        return out
+
+class fmul(nn.Module):
+    def setup(self):
+        super().setup()
+    @nn.compact
+    def __call__(self,x, y):
+        out = x * y
+        return out
