@@ -14,6 +14,9 @@ import sys
 
 import jax
 from jax.experimental.shard_map import shard_map
+import functools
+from pprint import pprint
+import flax.linen as nn
 
 def set_XLA_flags_gpu():
     flags = os.environ.get("XLA_FLAGS", "")
@@ -46,3 +49,59 @@ def simulate_CPU_devices(device_count: int = 8):
 
 def install_package(package: str) -> None:
     subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", package])
+
+
+def singleton(cls):
+    """make a class singleton"""
+    @functools.wraps(cls)
+    def wrapper_singleton(*args, **kwargs):
+        if wrapper_singleton.instance is None:
+            wrapper_singleton.instance = cls(*args,**kwargs)
+        return wrapper_singleton.instance
+    wrapper_singleton.instance = None
+    return wrapper_singleton
+
+def print_shapes(opName,get_attrvalue):
+    def decorator_func(func):
+        @functools.wraps(func)
+        def wrapper_func(self,*args,**kwargs):
+            if not (os.environ.get('PRINT_TENSOR_SHAPES',0)):
+                return func(self,*args, **kwargs)
+            Ops = ops()
+            Opdict = {}
+            numArgs = Ops.argsize(opName)
+            Opdict["layerName"] = get_attrvalue(self).lower()
+            Opdict["Op"]        = self.__class__.__name__
+            if (numArgs <= 1):
+               Opdict["input"] = args[0].shape
+            if (numArgs <= 2):
+               Opdict["weight"] = args[1].shape if opName is ["fadd","fmul"] else (args[0].shape[-1],self.features)
+            if (numArgs <=3 ):
+                if opName == "fa":
+                    Opdict["Qtensor"] = args[0].shape
+                    Opdict["Ktensor"] = args[1].shape
+                    Opdict["Vtensor"] = args[2].shape
+
+            pprint(Opdict)
+            return func(self,*args, **kwargs)
+        return wrapper_func
+    return decorator_func
+
+
+@singleton
+class ops:
+    def __init__(self):
+        self.unaryOps = ["relu","silu","gelu",
+                         "RMSNorm","LayerNorm","softmax",
+                         "argmax"]
+        self.binaryOps = ["fmul","fadd","fma","Dense","DenseGeneral","Linear","Embed"]
+        self.fusedOps = ["fa"]
+    def argsize(self,OpName):
+        if (OpName in self.unaryOps):
+            return 1
+        elif (OpName in self.binaryOps):
+            return 2
+        elif (OpName in self.fusedOps):
+            return 3
+        else:
+            raise ValueError(f"Unknown ops given ops_name= {OpName}")

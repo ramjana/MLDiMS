@@ -55,11 +55,11 @@ class TPAsyncllamaMLP(nn.Module):
      dtype: jnp.dtype
      kernel_init_scale_factor: float = 1.0
      communication_bidir: bool = True,
-     name: str ="MLPBlock"
 
      def setup(self):
          super().setup()
-
+         self.mul_block = fmul(name="mlpblock")
+         self.silu_block = silu(name="MlpBlock")
 
      @nn.compact
      def __call__(self,x: jax.Array) -> jax.Array:
@@ -78,13 +78,13 @@ class TPAsyncllamaMLP(nn.Module):
                   features=hidden_dim//num_devices,
                   use_norm=False,
                   use_bias=False,
-                  data_type=self.dtype
+                  data_type=self.dtype,
+                  name=self.name+"::mlp1",
              ),
              use_bidirectional = True,
              tp_strategy = 'gather',
              shard_axis_name=self.shard_axis_name,
              kernel_init_scale_factor=self.kernel_init_scale_factor*(num_devices**-0.5),
-             name="MLPInput1",
          )(x)
 
          mlp2_out = TPAsyncDense(
@@ -93,29 +93,29 @@ class TPAsyncllamaMLP(nn.Module):
                   features=hidden_dim//num_devices,
                   use_norm=False,
                   use_bias=False,
-                  data_type=self.dtype
+                  data_type=self.dtype,
+                  name=self.name+"::mlp2",
              ),
              tp_strategy = 'gather',
              shard_axis_name=self.shard_axis_name,
              use_bidirectional = True,
              kernel_init_scale_factor=self.kernel_init_scale_factor*(num_devices**-0.5),
-             name="MLPInput2",
          )(x)
-         x = fmul(mlp1_out, mlp2_out)
-         x = nn.silu(x)
+         x = self.mul_block(mlp1_out, mlp2_out)
+         x = self.silu_block(x)
 
          mlp3_out = TPAsyncDense(
              dense_fn = functools.partial(
                   MLPBlockOutput,
                   features=self.embedding_dim,
                   use_bias=False,
-                  data_type=self.dtype
+                  data_type=self.dtype,
+                  name=self.name+"::mlp3",
              ),
              use_bidirectional = True,
              tp_strategy = 'scatter',
              shard_axis_name=self.shard_axis_name,
              kernel_init_scale_factor=self.kernel_init_scale_factor*(num_devices**-0.5),
-             name="MLPInput3",
          )(x)
 
          return mlp3_out
@@ -144,7 +144,7 @@ class llamaTransformerBlock(nn.Module):
         #blayer
         #print(f"TPtransformer head_dim= {self.head_dim}")
         #print(f"TPtransformer num_heads= {self.num_heads}")
-        if self.config.fsdp is not None and "MultiHeadAttn" in self.config.fsdp_modules:
+        if self.config.fsdp and "MultiHeadAttn" in self.config.fsdp_modules:
             shard_parameter = True
         else:
             shard_parameter = False
@@ -178,16 +178,17 @@ class llamaTransformerBlock(nn.Module):
                        kvcache_prefill_axis_name=None,
                        kvcache_append_axis_name=None,
                        out_shard_axis_name=self.shard_axis_name,
-                       name="Attention",
+                       name="AttentionBlock",
                        train = train,
                        batch_size = bsz,   #HACK 
         )(hidden_state,start_pos,mode,mask)
-        hidden_state = fadd(attn_out,residual)
+        fadd_block = fadd(name="residual_add")
+        hidden_state = fadd_block(attn_out,residual)
         norm_out = RMSNorm(
             dtype=self.dtype,
             epsilon=self.norm_eps,
             name="postattnnorm")(hidden_state)
-        if self.config.fsdp is not None and "MLP" in self.config.fsdp_modules:
+        if self.config.fsdp and "MLP" in self.config.fsdp_modules:
             shard_parameter = True
         else:
             shard_parameter = False
@@ -209,7 +210,7 @@ class llamaTransformerBlock(nn.Module):
                       dtype = self.dtype,
                       name="mlpblock",
         )(norm_out)
-        out = fadd(mlp_out,hidden_state)
+        out = fadd_block(mlp_out,hidden_state)
         return out 
 
 class TransformerBackbone(nn.Module):
@@ -220,10 +221,9 @@ class TransformerBackbone(nn.Module):
         super().setup()
     @nn.compact
     def __call__(self, x: jax.Array, start_pos: int, mode:str,  mask: Optional[jax.Array]) -> jax.Array:
-        if self.config.fsdp is not None and "Block" in self.config.fsdp_modules:
+        shard_parameter = False
+        if self.config.fsdp and  "Block" in self.config.fsdp_modules:
             shard_parameter = True
-        else:
-            shard_parameter = False
         checkpoint_en = False
         block_fn = prep_module(
             layer=self.block_fn,
@@ -246,7 +246,7 @@ class TransformerBackbone(nn.Module):
         #    },  # We do not need to partition over the layer axis.
         #)(block, x,())
         for idx in range(self.config.num_layers):
-            block = block_fn(config=self.config,name=f"Block_{idx}")
+            block = block_fn(config=self.config,name=f"BlockLayer_{idx}")
             x = block(x,start_pos,mode,mask)
         return x
 
@@ -257,13 +257,8 @@ class llama2(nn.Module):
 
     @nn.compact
     def __call__(self, tokens: jax.Array, start_pos:int, mode: str) -> jax.Array:
-
-
         bs, seqlen = tokens.shape
-        num_devices = jax.lax.psum(1,self.config.model_axis_name)
-
         hidden_state = TPInputEmbedding(
-            seq_len = seqlen,   #FIXME this needs to be fixed to avoid aConcretizationTypeError
             shard_axis_name=self.config.model_axis_name,
             embedding_dim=self.config.model_dim,
             data_type=self.config.dtype,
@@ -273,8 +268,6 @@ class llama2(nn.Module):
         )(tokens)
 
         ##generate mask or tokensize>1
-
-        #print(hidden_state.shape)
 
         mask = None
         if seqlen > 1:
@@ -301,9 +294,8 @@ class llama2(nn.Module):
             dtype = self.config.dtype,
             shard_min_size=self.config.fsdp_min_weight_size,
             norm_en=False,
-            name="output_layer",
+            name="output",
         )(norm_out)
- 
 
         #out = TPAsyncDense(
         #    dense_fn = functools.partial(
@@ -320,7 +312,7 @@ class llama2(nn.Module):
 
 def get_transformer_module(config: Any):
     module_class = llama2 
-    if config.fsdp is not None:
+    if config.fsdp:
         shard_parameter = True
     else:
         shard_parameter = False

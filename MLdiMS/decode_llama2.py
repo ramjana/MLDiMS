@@ -160,7 +160,6 @@ def main(userArgs):
        #donate_argnames=("state", "metrics"),
     )
 
-    sys.exit()
     #prefill case
     print(f"running prefill stage for prompt-len = {config.prompt_len}")
     prev_pos  = 0

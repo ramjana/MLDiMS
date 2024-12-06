@@ -318,13 +318,13 @@ def train_model(num_steps:int ,single_layer:bool, seq_len: int, bs:int, num_devi
     #sys.exit()
 #
     #print("Transformer Block - Output Layer, Shard 0")
-    if config.model.parallel_block:
-        shard_0_params = state_transformer.params["backbone"]["block"]["out"]["shard_0"]["sharded"]
-    else:
-        shard_0_params = {
-            "attn": state_transformer.params["backbone"]["block"]["Attention"]["AttnOutput"]["shard_0"]["sharded"],
-            "mlp": state_transformer.params["backbone"]["block"]["mlp"]["MLPInput1"]["shard_0"]["sharded"],
-        }
+    #if config.model.parallel_block:
+    #    shard_0_params = state_transformer.params["backbone"]["block"]["out"]["shard_0"]["sharded"]
+    #else:
+    #    shard_0_params = {
+    #        "attn": state_transformer.params["backbone"]["block"]["Attention"]["AttnOutput"]["shard_0"]["sharded"],
+    #        "mlp": state_transformer.params["backbone"]["block"]["mlp"]["MLPInput1"]["shard_0"]["sharded"],
+    #    }
     #pprint(
     #    jax.tree.map(
     #        lambda x: x.shape,

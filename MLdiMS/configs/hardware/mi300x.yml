@@ -123,3 +123,8 @@ gmi_latency: 10
 
 ifetch_miss_latency: 512
 dpm_mode: 0
+clk: {
+       { 0: { 'gclk':1300, 'fclk':1300, 'MCLK':900 }, },
+       { 1: { 'gclk':1100, 'fclk':1550, 'MCLK':1100 } },
+       { 2: { 'gclk':900, 'fclk':1800, 'MCLK':1300 } },
+     }

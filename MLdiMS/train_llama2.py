@@ -79,10 +79,12 @@ def main(userArgs):
     print("Build nD mesh for distributed training ")
     simulate_CPU_devices(config.num_devices)
 
+    if config.single_layer_sim:
+        config.num_layers = 1
+        print("simulating single layer ...")
 
     devices = np.array(jax.devices()).reshape(-1,config.model_axis_size)
     mesh = Mesh(devices,(config.data_axis_name,config.model_axis_name))
-    print(mesh)
     ##create model
     model = get_transformer_module(config=config)
 
@@ -119,7 +121,6 @@ def main(userArgs):
         1,
         config.vocab_size,
     )
-    print(tokens.shape)
     
     batch_transformer = Batch(
         inputs=jnp.pad(tokens[:, :-1], ((0, 0), (1, 0)), constant_values=0),
@@ -177,23 +178,24 @@ def main(userArgs):
         state_transformer, metrics_transformer, batch_transformer
     )
     
-    print(f" Train for 10 steps")
+    print(f" Train for 3 steps")
 
-    for _ in tqdm(range(10)):
+    for _ in tqdm(range(3)):
         state_transformer, metrics_transformer = train_step_transformer_fn(
             state_transformer, metrics_transformer, batch_transformer
     )
 
-    print_metrics(metrics_transformer, title="Metrics - llama2 Transformer")
-    final_metrics_transformer = jax.tree.map(
-        lambda x: jnp.zeros(x.shape, dtype=x.dtype), metric_shapes
-    )
+    if not config.skip_metrics:
+        print_metrics(metrics_transformer, title="Metrics - llama2 Transformer")
+        final_metrics_transformer = jax.tree.map(
+            lambda x: jnp.zeros(x.shape, dtype=x.dtype), metric_shapes
+        )
 
-    print("collecting final metrics from across devices")
-    state_transformer, final_metrics_transformer = train_step_transformer_fn(
-        state_transformer, final_metrics_transformer, batch_transformer
-    )
-    print_metrics(final_metrics_transformer, title="Final Metrics - llama2 Transformer")
+        print("collecting final metrics from across devices")
+        state_transformer, final_metrics_transformer = train_step_transformer_fn(
+            state_transformer, final_metrics_transformer, batch_transformer
+        )
+        print_metrics(final_metrics_transformer, title="Final Metrics - llama2 Transformer")
 
 
 if __name__ == "__main__":

@@ -84,6 +84,7 @@ class _mlconfig:
 
         config_keys["fsdp_modules"] = lists_to_tuples(config_keys["fsdp_modules"])
 
+        config_keys["model_axis_size"] = int(config_keys["model_axis_size"])
         config_keys["num_devices"] = int(config_keys["num_devices"])
         config_keys["data_parallelism"] = int(config_keys["data_parallelism"])
         config_keys["device_batch_size"] = int(config_keys["device_batch_size"])

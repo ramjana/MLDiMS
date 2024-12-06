@@ -54,6 +54,7 @@ class TPllamaAttention(nn.Module):
          else:
              self.kvcache = None
 
+
      @nn.compact
      def flashattention(self,
          query: jax.Array,
@@ -94,10 +95,6 @@ class TPllamaAttention(nn.Module):
          #QKV projection
          #densegeneral  builtin functions shards embedding dimension inot num_heads, head_dim
          #x = x.reshape(-1,self.num_heads,head_dim)
-         #print(f"block emedding_dim = {self.embedding_dim}")
-         #print(f"block head_dim = {self.head_dim}")
-         #print(f"block num_heads = {self.num_heads}")
-         #print(f"TPMultiHeadAttention x.shape = {x.shape}")
          q,k,v = TPAsyncDense(
              dense_fn = functools.partial(
                  QKVProjection, 
@@ -106,11 +103,11 @@ class TPllamaAttention(nn.Module):
                  use_bias = self.use_bias_qkv,
                  normalize_qk = False,
                  data_type = self.dtype,
+                 name=self.name+"QKVProjection",
             ),
             shard_axis_name= self.qkv_shard_axis_name,
             tp_strategy = "Auto",
             kernel_init_scale_factor = num_devices**-0.5,
-            name="QKVProjection",
          )(x)
 
          _query = jnp.reshape(q,(bs, seqlen, self.num_heads//num_devices, self.head_dim))
@@ -136,10 +133,10 @@ class TPllamaAttention(nn.Module):
                  AttnOutput,
                  embedding_dim=self.embedding_dim,
                  data_type = self.dtype,
+                 name=self.name+"attnoutput",
             ),
             shard_axis_name= self.out_shard_axis_name,
             tp_strategy = "scatter",
-            name="AttnOutput",
             kernel_init_scale_factor = num_devices**-0.5,
          )(x)
          return x

@@ -55,7 +55,7 @@ class MLPBlockInput(nn.Module):
             kernel_init = self.kernel_init,
             use_bias = self.use_bias,
             dtype=self.data_type,
-            name="MLPDense"
+            name=self.name,
         )(x)
         #x = gelu()(x)
         x = nn.gelu(x)
@@ -77,7 +77,7 @@ class MLPBlockOutput(nn.Module):
             kernel_init = self.kernel_init,
             use_bias = self.use_bias,
             dtype=self.data_type,
-            name="MLPDense"
+            name=self.name,
         )(x)
         return x
 
@@ -142,7 +142,7 @@ class QKVProjection(nn.Module):
                 bias_init = self.bias_init,
                 dtype= self.data_type,
                 use_bias = self.use_bias,
-                name="QProj",
+                name=self.name+"::QProj",
         )(x)
         k = DenseGeneral(
                 (self.num_heads,self.head_dim),
@@ -150,7 +150,7 @@ class QKVProjection(nn.Module):
                 bias_init = self.bias_init,
                 dtype= self.data_type,
                 use_bias = self.use_bias,
-                name="KProj",
+                name=self.name+"::KProj",
         )(x)
         v = DenseGeneral(
                 (self.num_heads,self.head_dim),
@@ -158,7 +158,7 @@ class QKVProjection(nn.Module):
                 bias_init = self.bias_init,
                 dtype= self.data_type,
                 use_bias = self.use_bias,
-                name="VProj",
+                name=self.name+"::VProj",
         )(x)
         if self.normalize_qk:
             q = RMSNorm(
@@ -196,7 +196,7 @@ class QKVFusedAttnInput(nn.Module):
                 dtype= self.dtype,
                 param_dtype =  self.weight_dtype,
                 use_bias = self.use_bias,
-                name="QKVProj",
+                name=self.name+"::QKVProj",
                 shard_axes={"QKVProj": self.shard_axes},
         )(x)
         return qkv[:,:,0,...], qkv[:,:,1,...], qkv[:,:,2,...]
@@ -693,7 +693,7 @@ class InputEmbedding(nn.Module):
     data_type: jnp.dtype
     vocab_size: int
     embedding_dim: int
-    encoding_type: Literal["learned","sinusoidal"] = "sinusoidal"
+    skip_posembed: bool = True
 
     def setup(self):
         super().setup()
@@ -706,10 +706,13 @@ class InputEmbedding(nn.Module):
             features=self.embedding_dim//num_devices,
             embedding_init=nn.initializers.normal(stddev=1.0),
             dtype=self.data_type,
-            name="token_embedding",
+            name=self.name,
         )(x)
-        x = PositionalEncoding(
-            embedding_dim = self.embedding_dim,    
-            shard_axis_name=self.shard_axis_name,
-            name="PositionalEncoding")(x,None)
-        return x
+        if not (self.skip_posembed):
+            x = PositionalEncoding(
+                embedding_dim = self.embedding_dim,
+                shard_axis_name=self.shard_axis_name,
+                name="PositionalEncoding")(x,None)
+            return x
+        else:
+            return x
