@@ -21,7 +21,7 @@ num_bits_channel: 64
 num_hbm_channels: 128
 hbm_strobe_freq: 6.4
 
-hbm_efficiency: .35
+hbm_efficiency: .34   #best read workload BW achievable effi
 
 hbm_read_bw: 64
 hbm_write_bw: 64
@@ -31,16 +31,26 @@ l2_write_bw: 64
 mall_read_bw: 64
 mall_write_bw: 64
 
-l2_efficiency: .95
+l1_efficiency: .95
+l2rd_efficiency: .95
+l2wr_efficiency: .85
 l2_hit: .7
-l2_hit_latency: 256  ##cycles
-mall_hit_latency: 83
-hbm_latency: 80
+
+mallrd_efficiency: .95
+mallwr_efficiency: .85
+
 lds_latency: 48
 l1_hit_latency: 144
+l2_hit_latency: 254
+l2_miss_latency: 328
+mall_hit_latency: 74
+mall_miss_latency: 261
+hbm_latency: 187
+l2_wr_latency: 350  ##cycles
+barrier_latency: 64
+
 
 l2_df_bw: 64
-
 l1_capacity:  32
 lds_capacity: 64
 icache_capacity: 16
@@ -48,9 +58,15 @@ dcache_capacity: 32
 lds_bandwidth: 128
 l1_read_bw: 64
 l2_write_bw: 64
+l1_write_bw: 64
 icache_read_bw: 128
-atomic_rate_channel: 16  #f32 rate 
-atomic_latency: 40
+f32_atomic_rate: 16  #f32 rate 
+f32_atomic_eff: .35
+
+lds_issue_latency: 8
+vmem_issue_latency: 16
+valu_issue_latency: 4
+salu_issue_latency: 4
 
 #CU parameters
 wavefront: 64
@@ -67,6 +83,7 @@ num_vgpr_wrports: 4
 direct_lds_write_bw: 64
 mul32_rate: 64
 fma32_rate: 128
+dot2_f32_f16: 256
 valu_coexec_rate: 256
 fma64_rate: 128
 num_waves_simd: 10
@@ -105,8 +122,14 @@ llc_cacheline_size: 64
 
 l1_efficiency: 1
 l2_efficiency: .95
-llc_efficiency: .8 
+mall_efficiency: .8 
 
+gemm_xdl_inst: {
+                'f16': {'M':32, 'N':32, 'K':8,  'cycles' : 32},
+                'bf16': {'M':32, 'N':32, 'K':8, 'cycles' : 32},
+                'f8':  {'M':32, 'N':32, 'K':16, 'cycles' : 16},
+                'bf8':  {'M':32, 'N':32, 'K':16, 'cycles' : 16},
+               }
 flush_l2: 1
 flush_l2_latency: 2048 
 
@@ -124,7 +147,7 @@ gmi_latency: 10
 ifetch_miss_latency: 512
 dpm_mode: 0
 clk: {
-       { 0: { 'gclk':1300, 'fclk':1300, 'MCLK':900 }, },
-       { 1: { 'gclk':1100, 'fclk':1550, 'MCLK':1100 } },
-       { 2: { 'gclk':900, 'fclk':1800, 'MCLK':1300 } },
+        'mode0': { 'gclk':1300, 'fclk':1300, 'MCLK':900  },
+        'mode1': { 'gclk':1100, 'fclk':1550, 'MCLK':1100 },
+        'mode2': { 'gclk':900, 'fclk':1800, 'MCLK':1300  },
      }

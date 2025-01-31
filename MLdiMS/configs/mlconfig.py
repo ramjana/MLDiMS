@@ -3,11 +3,12 @@ import math
 import os
 import sys
 
+import jax.numpy as jnp
 from typing import List, Tuple, Any, Union
-
 import flax
 import jax
 import yaml
+from dataclasses import dataclass
 
 
 def lists_to_tuples(l: list[Any]) -> Union[tuple[Any], list[Any]]:
@@ -25,6 +26,22 @@ def get_num_slices():
     except:
       return 1
 
+
+@dataclass
+class algoConfig:
+    """class for algorithm configuration"""
+
+    Algo: str
+    weight_l2_hit: jnp.float32
+    weight_mall_hit: jnp.float32
+    act_l2rd_hit: jnp.float32
+    act_mallrd_hit: jnp.float32
+    act_l2wr_hit: jnp.float32
+    act_mallwr_hit: jnp.float32
+    dpm_mode: int
+    clk_eff: jnp.float32
+    act_func:str = None
+    tileSetup_time: int  = 500 #cycles
 
 _config = None
 config = None
