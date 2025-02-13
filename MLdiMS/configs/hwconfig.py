@@ -6,8 +6,11 @@ import sys
 from typing import List, Tuple, Any, Union
 import yaml
 import numpy as jnp
+from pprint import pprint
 
 from dataclasses import dataclass
+from configs import common
+from configs.common import arch_dict
 
 
 def lists_to_tuples(l: list[Any]) -> Union[tuple[Any], list[Any]]:
@@ -17,8 +20,12 @@ def get_num_target_devices():
     return len(jax.devices())
 
 
-_hw_config = None
-hw_config = None
+#_hw_config = None
+#hw_config = None
+
+#arch_dict = {
+#        "mi300x" : "hardware/mi300x.yml"
+#       }
 
 @dataclass
 class ClockConfig:
@@ -82,7 +89,9 @@ class _hwconfig:
 
     def __init__(self, userArgs: list[str], **kwargs):
 
-        config_file = userArgs[1]
+        config_name = userArgs[1].split("=",1)
+        file_name = arch_dict[str(config_name[1])]
+        config_file = os.path.join(os.path.dirname(__file__),file_name)
         with open(config_file,"r", encoding="utf-8") as file:
             config_from_yaml = yaml.safe_load(file)
 
@@ -135,10 +144,13 @@ class HWConfig:
     return _hw_config.configKeys
 
 
-def initialize(argv, **kwargs):
+def hw_initialize(argv, **kwargs):
   global _hw_config, hw_config
   _hw_config = _hwconfig(argv, **kwargs)
   hw_config = HWConfig()
+  return hw_config
 
 if __name__ == "__main__":
-  initialize(sys.argv)
+  userArgs = sys.argv
+  hwCfg = hw_initialize(userArgs)
+  print(hwCfg.mallwr_bw_cu)

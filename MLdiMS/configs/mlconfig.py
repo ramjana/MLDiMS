@@ -9,6 +9,9 @@ import flax
 import jax
 import yaml
 from dataclasses import dataclass
+from pprint import pprint
+from configs import common
+from configs.common import model_dict
 
 
 def lists_to_tuples(l: list[Any]) -> Union[tuple[Any], list[Any]]:
@@ -42,12 +45,38 @@ class algoConfig:
     clk_eff: jnp.float32
     act_func:str = None
     tileSetup_time: int  = 500 #cycles
+    gemm_eff_cap: jnp.float32 = 0.98
 
-_config = None
-config = None
+@dataclass
+class attnConfig:
 
-_hw_config = None
-hw_config = None
+    Algo: str
+    qtile_l2rd_hit : jnp.float32
+    ktile_l2rd_hit : jnp.float32
+    vtile_l2rd_hit : jnp.float32
+
+    qtile_mallrd_hit : jnp.float32
+    ktile_mallrd_hit : jnp.float32
+    vtile_mallrd_hit : jnp.float32
+    otile_l2wr_hit: jnp.float32
+    otile_mallwr_hit: jnp.float32
+    vlayout: str
+    causal_mask_eff : float
+    dpm_mode: int
+    clk_eff: jnp.float32
+    tileSetup_time: int  = 500 #cycles
+    act_func:str = None
+    weight_l2_hit: jnp.float32 = 0.0
+    weight_mall_hit: jnp.float32 = 0.0
+    gemm_eff_cap: jnp.float32 = 0.98
+
+#_llmconfig = None
+#llmconfig = None
+
+#model_dict = {
+#        "llama2_7b" : "models/llama2_7b.yml",
+#        "base_model": "models/base_transformer.yml",
+#        }
 
 class _mlconfig:
 
@@ -65,7 +94,9 @@ class _mlconfig:
 
     def __init__(self, userArgs: list[str], **kwargs):
 
-        config_file = userArgs[1]
+        config_name = userArgs[1].split("=",1)
+        file_name = model_dict[str(config_name[1])]
+        config_file = os.path.join(os.path.dirname(__file__),file_name)
         with open(config_file,"r", encoding="utf-8") as file:
             config_from_yaml = yaml.safe_load(file)
 
@@ -121,30 +152,35 @@ class _mlconfig:
 
                     
 
-class llmConfig:
+class llmConfig(object):
 
   def __init__(self):
     pass
 
+  def __new__(cls):
+    if not hasattr(cls,"instance"):
+       cls.instance = super(llmConfig,cls).__new__(cls)
+       return cls.instance
+
   def __getattr__(self, attr):
-    if attr not in _config.configKeys:
+    if attr not in _llmconfig.configKeys:
       raise ValueError(f"Requested key {attr}, not in config")
-    return _config.configKeys[attr]
+    return _llmconfig.configKeys[attr]
 
   def __setattr__(self, attr, value):
-      _config.configKeys[attr] = value
+      _llmconfig.configKeys[attr] = value
 
   def get_keys(self):
-    return _config.configKeys
+    return _llmconfig.configKeys
 
-
-def initialize(argv, **kwargs):
-  global _config, config
-  _config = _mlconfig(argv, **kwargs)
-  config = llmConfig()
-
+def ml_initialize(argv, **kwargs):
+  global _llmconfig, llmconfig
+  _llmconfig = _mlconfig(argv, **kwargs)
+  llmconfig = llmConfig()
+  return llmconfig
 
 if __name__ == "__main__":
-  initialize(sys.argv)
-  print(config.steps)
-  r = range(config.steps)
+    ###--model=nameof the model
+  llmCfg = ml_initialize(sys.argv)
+  r = range(llmCfg.steps)
+  print(llmCfg.get_keys())

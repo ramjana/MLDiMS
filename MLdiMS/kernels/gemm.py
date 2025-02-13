@@ -8,23 +8,8 @@ from configs.mlconfig import algoConfig
 def is_integer(a,b):
     return (a%b == 0)
 
-def cdiv(x:int,div:int):
+def cdiv(x:int, div:int):
     return (x + div -1 ) // div
-
-def xdlrate(Wbpe,Xbpe):
-        dtype = max(Wbpe,Xbpe)
-        if dtype == 8:
-           return hwCfg.xdl_f64_rate
-        elif dtype == 4:
-           return hwCfg.xdl_f32_rate
-        elif dtype == 2:
-           return hwCfg.xdl_f16_rate
-        elif dtype == 1:
-           return hwCfg.xdl_f8_rate
-        elif dtype == 0.5:
-           return hwCfg.xdl_f8_rate
-        else:
-           raise ValueError(f"Incorrect datatype given={ Wdtype, Xdtype }")
        
 def tostr(dtype:jnp.dtype):
     if dtype == jnp.float16:
@@ -33,7 +18,6 @@ def tostr(dtype:jnp.dtype):
         return "bf16"
     else:   
         return "f8"
-
 
 def gemm(
          M: int, N: int, K: int,
@@ -67,11 +51,11 @@ def gemm(
     #determine if there is any tail loop
     tail_loop = True if (gemm_k%BLOCK_K) != 0 else False
 
+    #print(f" M={M} N={N} BLOCK_M={BLOCK_M} BLOCK_N={BLOCK_N} BLOCK_K={BLOCK_K}")
     mtiles = cdiv(M,BLOCK_M)
     ntiles = cdiv(N,BLOCK_N)
     ktiles = GSU
 
-    print(f" BLOCK_M={BLOCK_M} BLOCK_N={BLOCK_N} BLOCK_K={BLOCK_K}")
 
     #GPU granularity factor
     num_tiles_per_cu = cdiv(mtiles*ntiles*ktiles,hwCfg.num_cus)
@@ -98,6 +82,9 @@ def gemm(
     hbm_pipe_lat = hwCfg.hbm_latency
 
     def assert_check():
+        assert BLOCK_M<=M, ValueError(f" given GEMM_M size = {M} BLOCK_M = {BLOCK_M}")
+        assert BLOCK_N<=N, ValueError(f" given GEMM_N size = {N} BLOCK_M = {BLOCK_N}")
+        assert(BLOCK_K<=K), ValueError(f" given GEMM_K size = {K} BLOCK_M = {BLOCK_K}")
         assert BLOCK_M*BLOCK_N*4//256 <= 1024, ValueError(f"output tile size too big(register spills) {BLOCK_M} {BLOCK_K}")
         ldsReq = BLOCK_M*BLOCK_K*Xbpe+BLOCK_N*BLOCK_K*Wbpe
         assert ldsReq <= hwCfg.lds_capacity*1024, ValueError(f"tile size larger than LDS size give {BLOCK_M}::{BLOCK_N}::{BLOCK_K}")
@@ -326,7 +313,7 @@ def gemm(
     kernel_time = (num_tiles_per_cu*loop_time) + prologue_time
     #print(f"kerneltime = {kernel_time} {loop_time} {store_cycles} {mem_time} {math_cycles} {prologue_time} {schedule_conflict_cycles}")
     #print(f"number of tiles per cu {num_tiles_per_cu}")
-    print(f"kerneltime = {kernel_time}")
+    #print(f"kerneltime = {kernel_time}")
     return (kernel_time)
 
 if __name__ == "__main__":
@@ -338,4 +325,3 @@ if __name__ == "__main__":
     cycles = gemm(4864,4096,4096,256,256,64,1,1,2,2,256,jnp.float16,jnp.float16,jnp.float16,hwCfg=hwConfig,algoCfg=gemmConfig)
     time_us = cycles  * (1/1300) * 1e-3
     print(f"kernel time (in milli-seconds) = {time_us}")
-    

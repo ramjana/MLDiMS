@@ -7,7 +7,7 @@ num_heads: 32
 num_kv_heads: 32
 hidden_dim: 16384 
 num_layers: 32
-attn_dim: 64 
+attn_dim: 128 
 mlp_activations: ["silu","linear"]
 enable_dropout: False
 logits_via_embedding: False
@@ -89,15 +89,14 @@ cosine_learning_rate_final_fraction: 0.1
 warmup_steps: 0.1
 learning_rate_schedule_steps: -1
 micro_batch_size_to_train_on: 4 
-device_batch_size: 32 
-
+device_batch_size: 16 
 log_period: 100 
 
 learning_rate: 3.e-5
 learning_rate_schedule_steps: -1
 
 max_seq_length: 2048
-max_prefill_predict_len: 64  #maximum  length for the prefill for append phase
+max_prefill_predict_len: 1024  #maximum  length for the prefill for append phase
 
 #Rope parameters
 rope_min_timescale: 1
@@ -126,5 +125,5 @@ inference_stages: "prefill,append"
 inference_loop_iters: 10
 compute_dim_order: "0,1,2,3"
 prompt: "i love to"
-prompt_len: 256
-gen_len: 32
+prompt_len: 1024 
+gen_len: 8

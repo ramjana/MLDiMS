@@ -17,7 +17,7 @@ def Activation(M: int, K: int,
         BLOCK_M: int, BLOCK_K: int, BlockSize:int,
         cols_per_thread: int, num_rows: int, vec_bitwidth: int = 16,
         rounding_mode_rne_sw: bool = False,
-        shuffle_reduction: bool = False,
+        shuffle_reduction: bool = True,
         ds_permute_reduction: bool = False,
         persistent_kernel: bool = True,
         fusedOps: tuple=None) -> int:
