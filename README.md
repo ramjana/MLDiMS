@@ -1,6 +1,6 @@
 ## General Information
 
-MlDims(Machine learning distributed performance modeling system) is a performance modeling tool for AMD GPU architecture to estimate performance of ML models supporting different model configurations, parallelsim strategies.
+MLDiMS(Machine learning distributed performance modeling system) is a performance modeling tool for AMD GPU architecture to estimate performance of ML models supporting different model configurations, parallelsim strategies.
 
 
 LLM is developed using jax framework and simulated using CPU for various parallelism strategies. 
