@@ -1,4 +1,4 @@
-##General Information
+## General Information
 
 MlDims(Machine learning distributed performance modeling system) is a performance modeling tool for AMD GPU architecture to estimate performance of ML models supporting different model configurations, parallelsim strategies.
 
@@ -24,6 +24,6 @@ cd MLdiMS
 python3 decode_llama2.py --model=llama2_7b --arch=mi300x
 ```
 
-##Future updates
-pipeline parallelism support
-llama3 model 
+## Future updates
+pipeline parallelism support</br>
+llama3 model. 
