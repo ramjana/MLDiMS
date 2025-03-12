@@ -95,7 +95,7 @@ class TPllamaAttention(nn.Module):
          #QKV projection
          #densegeneral  builtin functions shards embedding dimension inot num_heads, head_dim
          #x = x.reshape(-1,self.num_heads,head_dim)
-         q,k,v = TPAsyncDense(
+         _query,_key,_value = TPAsyncDense(
              dense_fn = functools.partial(
                  QKVProjection, 
                  head_dim = self.head_dim,
@@ -110,9 +110,10 @@ class TPllamaAttention(nn.Module):
             kernel_init_scale_factor = num_devices**-0.5,
          )(x)
 
-         _query = jnp.reshape(q,(bs, seqlen, self.num_heads//num_devices, self.head_dim))
-         _key =   jnp.reshape(k,(bs, seqlen, self.num_heads//num_devices, self.head_dim))
-         _value = jnp.reshape(v,(bs, seqlen, self.num_heads//num_devices, self.head_dim))
+         if (len(_query.shape) != 4):
+            _query = jnp.reshape(_query,(bs, seqlen, self.num_heads//num_devices, self.head_dim))
+            _key =   jnp.reshape(k,(bs, seqlen, self.num_heads//num_devices, self.head_dim))
+            _value = jnp.reshape(v,(bs, seqlen, self.num_heads//num_devices, self.head_dim))
 
          _query = RotaryPositionalEncoding(self.head_dim)(_query,positions)
          _key = RotaryPositionalEncoding(self.head_dim)(_key,positions)

@@ -354,8 +354,8 @@ class GenericAttention(nn.Module):
 
 
     prefill_dim_order: tuple = (1,2,0,3)
-    append_dim_order: tuple = (1,2,0,3)
-    compute_dim_order: tuple = (0,1,2,3)
+    append_dim_order: tuple = (0,2,1,3)  #bs,seqlen,local_heads,attn_dim
+    compute_dim_order: tuple = (0,1,2,3) #bs,local_heads,seqlen,attn_dim
 
     mask_value = -0.7 ** float(np.finfo(np.dtype("float32")).max)
 

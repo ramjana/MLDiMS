@@ -358,7 +358,6 @@ def train_model(num_steps:int ,single_layer:bool, seq_len: int, bs:int, num_devi
         state_transformer, metrics_transformer, batch_transformer
     )
 
-    sys.exit()
 
     for _ in tqdm(range(num_steps)):
         state_transformer, metrics_transformer = train_step_transformer_fn(

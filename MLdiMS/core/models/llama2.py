@@ -144,6 +144,7 @@ class llamaTransformerBlock(nn.Module):
         #blayer
         #print(f"TPtransformer head_dim= {self.head_dim}")
         #print(f"TPtransformer num_heads= {self.num_heads}")
+        #print(f"TPtransformer model_dim= {self.embedding_dim}")
         if self.config.fsdp and "MultiHeadAttn" in self.config.fsdp_modules:
             shard_parameter = True
         else:
@@ -272,7 +273,7 @@ class llama2(nn.Module):
         mask = None
         if seqlen > 1:
             mask = jnp.full((seqlen,seqlen), float("-inf"))
-            mask = jnp.triu(mask)
+            mask = jnp.triu(mask,k=1)
             mask = jnp.hstack([
                 jnp.zeros((seqlen,start_pos)), 
                 mask]).astype(hidden_state)

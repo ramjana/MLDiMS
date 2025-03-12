@@ -64,6 +64,7 @@ class PerfTune:
             self.cache[key] = builtins.min(timings.values())
             #self.cache[key] = builtins.min(timings,key=timings.get)
             run_time = self.cache[key] 
+            #print(run_time)
         else:
             config = self.configs[0]
             run_time = self.do_bench(config, *args, **kwargs)

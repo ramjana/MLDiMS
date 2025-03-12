@@ -16,12 +16,7 @@ from configs.mlconfig import algoConfig
 from configs import common
 from configs.common import ModelCfg
 
-class llamaConfig(ModelCfg):
-
-    def __new__(cls,*args,**kwargs):
-        if not hasattr(cls,"instance"):
-            cls.instance = super(llamaConfig,cls).__new__(cls)
-            return cls.instance
+class llamaConfig(metaclass=ModelCfg):
 
     def __init__(self,modelArgs):
         self.userArgs = modelArgs
@@ -29,7 +24,7 @@ class llamaConfig(ModelCfg):
            ValueError(f" first argument must be --model ")
         self.llmCfg = mlconfig.ml_initialize(self.userArgs)
         self.hwCfg  = hwconfig.hw_initialize(self.userArgs[1:])
-        super().__init__(name="llama2_7b")
+        _,self.name   = str(self.userArgs[1]).split("=")
 
     def get_llmcfg(self):
         return self.llmCfg

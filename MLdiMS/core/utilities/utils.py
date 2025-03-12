@@ -65,7 +65,7 @@ def print_shapes(opName,get_attrvalue):
     def decorator_func(func):
         @functools.wraps(func)
         def wrapper_func(self,*args,**kwargs):
-            if not (os.environ.get('PRINT_TENSOR_SHAPES',0)):
+            if not (os.environ.get('PRINT_TENSOR_SHAPES',0) == 1):
                 return func(self,*args, **kwargs)
             Ops = ops()
             Opdict = {}

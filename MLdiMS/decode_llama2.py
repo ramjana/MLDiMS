@@ -13,9 +13,10 @@ from jax.sharding import Mesh
 from jax.sharding import PartitionSpec as P
 from ml_collections import ConfigDict
 from tqdm.auto import tqdm
-from configs import mlconfig
+from configs import mlconfig, common
 from configs.mlconfig import llmConfig
 from jax.experimental import mesh_utils
+from configs.llamaconfig import llamaConfig
 
 PyTree = Any
 Parameter = jax.Array | nn.Partitioned
@@ -37,8 +38,12 @@ def get_tokenizer(tokenizer_path):
 
 def main(userArgs):
 
-    mlconfig.initialize(sys.argv)
-    config = mlconfig.config
+    #mlconfig.initialize(sys.argv)
+    #config = mlconfig.config
+    llmCfg  = llamaConfig(sys.argv)
+    config  = llmCfg.get_llmcfg()
+
+    common.set_modelCfg(llmCfg)
 
     print("Build nD mesh for distributed inference ")
     simulate_CPU_devices(config.num_devices)
@@ -115,10 +120,12 @@ def main(userArgs):
 
     tokens = jax.random.randint(
         data_inputs_rng,
-        (config.max_batch_size, int(config.prompt_len)+int(config.gen_len)),
+        (config.max_batch_size, min(config.max_seq_length,int(config.prompt_len)+int(config.gen_len))),
         1,
         config.vocab_size,
     )
+
+    #print(config.max_batch_size,tokens.shape,config.vocab_size)
     
     batch_transformer = Batch(
         inputs=jnp.pad(tokens[:, :config.prompt_len-1], ((0, 0), (1, 0)), constant_values=0),

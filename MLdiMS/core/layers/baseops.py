@@ -14,6 +14,7 @@ import jax.numpy as jnp
 from flax.linen import partitioning as nn_partitioning
 
 from core.utilities.utils import print_shapes
+from kernels.decorators import gemm_call
 
 import dataclasses
 
@@ -197,7 +198,6 @@ class dot_product_attention(nn.Module):
        P = P.astype(dtype)
        return P
 
-
 class DenseGeneral(ShardMixIn,nn.DenseGeneral):
     """ linear dense layer with flexible axes inherited from jax.liner.nn.DenseGeneral
     Orignal Source code is at
@@ -208,6 +208,7 @@ class DenseGeneral(ShardMixIn,nn.DenseGeneral):
         super().setup()
 
     #@perf("DenseGeneral",attrgetter('features'))
+    @gemm_call('features','dtype')
     @print_shapes("DenseGeneral",attrgetter('name'))
     def __call__(self,x: jax.Array) -> jax.Array:
         # update cycles 
