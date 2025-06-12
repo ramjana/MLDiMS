@@ -426,7 +426,7 @@ if __name__ == "__main__":
     attnCfg = attnConfig(Algo="default",qtile_l2rd_hit= 0.0, qtile_mallrd_hit=0.0, ktile_l2rd_hit=0.75, ktile_mallrd_hit=0.25,
                          vtile_mallrd_hit=0.25, vtile_l2rd_hit=0.75,tileSetup_time = 500,vlayout="r",dpm_mode=0, clk_eff=0.9,
                          otile_l2wr_hit=0.0, otile_mallwr_hit=0.0,causal_mask_eff=1.7)
-    hwconfig.initialize(sys.argv)
+    hwconfig.hw_initialize(sys.argv)
     hwConfig = hwconfig.hw_config
 
     cycles = attention(batch_size=16,

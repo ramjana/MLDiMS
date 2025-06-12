@@ -319,7 +319,7 @@ def gemm(
 if __name__ == "__main__":
 
     gemmConfig = algoConfig(Algo="default",weight_l2_hit= 0.75, weight_mall_hit=0.75, act_l2rd_hit=0.75, act_mallrd_hit = 0.75, tileSetup_time = 800)
-    hwconfig.initialize(sys.argv)
+    hwconfig.hw_initialize(sys.argv)
     hwConfig = hwconfig.hw_config
 
     cycles = gemm(4864,4096,4096,256,256,64,1,1,2,2,256,jnp.float16,jnp.float16,jnp.float16,hwCfg=hwConfig,algoCfg=gemmConfig)

@@ -314,7 +314,7 @@ if __name__ == "__main__":
                           act_mallwr_hit = 0.0,
                           dpm_mode=2,clk_eff=0.65,
                           act_func="gelu")
-    hwconfig.initialize(sys.argv)
+    hwconfig.hw_initialize(sys.argv)
     hwConfig = hwconfig.hw_config
     
     cycles = Activation(4096,4096,jnp.float16,hwCfg=hwConfig,algoCfg=actConfig,

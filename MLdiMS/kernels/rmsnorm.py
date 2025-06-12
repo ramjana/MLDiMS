@@ -291,7 +291,7 @@ def rmsnorm(M: int, K: int,
 if __name__ == "__main__":
 
     lnConfig = algoConfig(Algo="default",weight_l2_hit= 0, weight_mall_hit=0, act_l2rd_hit=0.0, act_mallrd_hit = 0.0, act_l2wr_hit=0.0, act_mallwr_hit = 0.0,dpm_mode=2,clk_eff=0.65)
-    hwconfig.initialize(sys.argv)
+    hwconfig.hw_initialize(sys.argv)
     hwConfig = hwconfig.hw_config
 
     cycles = rmsnorm(4096,4096,jnp.float16,hwCfg=hwConfig,algoCfg=lnConfig,

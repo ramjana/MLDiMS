@@ -310,11 +310,11 @@ def layernorm(M: int, K: int,
 if __name__ == "__main__":
 
     lnConfig = algoConfig(Algo="default",weight_l2_hit= 0, weight_mall_hit=0, act_l2rd_hit=0.0, act_mallrd_hit = 0.0, act_l2wr_hit=0.0, act_mallwr_hit = 0.0,dpm_mode=2,clk_eff=0.65)
-    hwconfig.initialize(sys.argv)
+    hwconfig.hw_initialize(sys.argv)
     hwConfig = hwconfig.hw_config
 
-    cycles = layernorm(4096,4096,jnp.float16,hwCfg=hwConfig,algoCfg=lnConfig,
-                       BLOCK_M=4, BLOCK_K=4096, BlockSize=512,GSU=1,
+    cycles = layernorm(92,4096,jnp.float16,hwCfg=hwConfig,algoCfg=lnConfig,
+                       BLOCK_M=1, BLOCK_K=4096, BlockSize=512,GSU=1,
                        cols_per_thread=32, num_rows=4,vec_bitwidth=16,
                        shuffle_reduction=False,
                        ds_permute_reduction=True)
@@ -330,7 +330,6 @@ if __name__ == "__main__":
     gclk = 2100*.65
     time_us = cycles  * (1/gclk)
     print(f"kernel time (in micro-seconds) = {time_us}")
-    """
     
     cycles = layernorm(4096*4096,4096,jnp.float16,hwCfg=hwConfig,algoCfg=lnConfig,
                        BLOCK_M=32*4, BLOCK_K=4096, BlockSize=512,GSU=1, 
@@ -356,4 +355,5 @@ if __name__ == "__main__":
     time_us = cycles  * (1/gclk)
     print(f"kernel time (in micro-seconds) = {time_us}")
     
+    """
 
